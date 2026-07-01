@@ -1,0 +1,16 @@
+#!ipxe
+
+echo ============================================
+echo  iPXE Boot - Ubuntu 24.04 Live (NFS root)
+echo ============================================
+
+set server 192.168.100.1
+
+echo Cargando kernel...
+kernel http://${server}/vmlinuz boot=casper netboot=nfs nfsroot=${server}:/mnt/ubuntu-iso ip=dhcp nomodeset console=ttyS0,115200 console=tty1 ---
+
+echo Cargando initrd...
+initrd http://${server}/initrd
+
+echo Arrancando sistema...
+boot

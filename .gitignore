@@ -1,0 +1,22 @@
+# ISOs — nunca en el repo (varios GB)
+*.iso
+
+# Archivos extraídos del ISO — se regeneran con 02-extract-iso.sh
+boot/vmlinuz
+boot/initrd
+
+# Squashfs y binarios del casper — se sirven desde el ISO montado por NFS
+boot/casper/*.squashfs
+boot/casper/*.manifest
+boot/casper/*.size
+boot/casper/*.yaml
+boot/casper/*.gpg
+
+# Docker
+master/.env
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.swp
+*~
