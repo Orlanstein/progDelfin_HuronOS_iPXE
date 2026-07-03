@@ -1,16 +1,16 @@
 #!ipxe
 
 echo ============================================
-echo  iPXE Boot - Ubuntu 24.04 Live (NFS root)
+echo  iPXE Boot - HuronOS (netboot)
 echo ============================================
 
 set server 192.168.100.1
 
 echo Cargando kernel...
-kernel http://${server}/vmlinuz boot=casper netboot=nfs nfsroot=${server}:/mnt/ubuntu-iso ip=dhcp nomodeset console=ttyS0,115200 console=tty1 ---
+kernel http://${server}/vmlinuz-6.0.15-huronos+ vga=normal acpi=force rw printk.time=0 consoleblank=0 quiet loglevel=3 console=ttyS0,115200 console=tty1 huronos.flags=(netboot=true;system.url=http://${server}/huronos-system.sfs;persistence=true;cache=2048) ---
 
 echo Cargando initrd...
-initrd http://${server}/initrd
+initrd http://${server}/initrfs.img
 
 echo Arrancando sistema...
 boot
