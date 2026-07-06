@@ -6,11 +6,11 @@ Registro cronológico del trabajo de reemplazar Ubuntu/casper por HuronOS arranc
 
 Que las PCs del laboratorio arranquen HuronOS completo (incluyendo el escritorio Budgie) directamente por red, sin instalar una memoria USB por equipo, usando la infraestructura iPXE ya existente en este proyecto (dnsmasq + nginx + QEMU).
 
-## Estado actual (2026-07-01)
+## Estado actual (2026-07-06)
 
-**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU.
+**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, **con red funcionando automáticamente dentro del escritorio** (DHCP vía `connman`, conectividad confirmada contra el master). Ver intento 9.
 
-**Pendiente:** una vez dentro del escritorio, la red no queda configurada como en un arranque real desde USB (no hay conectividad, no se sincronizan `directives.hdf`). Ver "Próximos pasos".
+**Pendiente:** implementar el sync de `directives.hdf` y de `event`/`contest` contra el master (Fase 2). Ver "Próximos pasos".
 
 ## Bitácora de intentos
 
@@ -63,14 +63,29 @@ Corrección (en `huronos-patch/livekitlib`, dentro de `find_data_netboot()`): ap
 
 Con el fix de RAM-copy aplicado, el arranque tardó ~2:30 min (copiar ~1.1 GiB a RAM vía `httpfs2` sin caché) pero **llegó al escritorio Budgie completo**, con autologin de `contestant` funcionando.
 
-**Pendiente detectado:** dentro del escritorio, la red no se configura como en un arranque real desde USB — no hay conectividad, no se sincronizan directivas. Sospecha: `connman` (el gestor de red de HuronOS) no está levantando la interfaz `e1000` automáticamente en este entorno, o el sistema completo (capas `huronOS/base/*.hsl`) no incluye `e1000.ko` en su propio árbol de módulos (independiente del que se armó a mano para el `initrd`).
+**Pendiente detectado en ese momento:** dentro del escritorio, la red no parecía configurarse como en un arranque real desde USB. Sospecha inicial: `connman` no levantaba la interfaz `e1000` automáticamente, o el sistema completo (capas `huronOS/base/*.hsl`) no incluía `e1000.ko` en su propio árbol de módulos (independiente del que se armó a mano para el `initrd`). Ver intento 9 — esta sospecha resultó incorrecta.
+
+### 9. Diagnóstico de red post-boot: no era un bug (2026-07-06)
+
+Investigación estática de `huronOS/base/01-core.hsl` (la capa del sistema completo, no el initrd): `e1000.ko`/`e1000e.ko` **sí** están presentes en `/usr/lib/modules/6.0.15-huronos+/kernel/drivers/net/ethernet/intel/`, con sus alias PCI correctos en `modules.alias`, y `connman.service` está habilitado (systemd + sysvinit). También se confirmó, leyendo `change_root()` en `lib/livekitlib` del initrd, que `pivot_root`/`chroot` no matan el `udhcpc` que el propio `init` lanza para descargar `huronos-system.sfs` — hipótesis: ese proceso residual podía interferir con `connman` al arrancar el sistema completo.
+
+Se arrancó con `debug` agregado a `huronos.flags` para diagnosticar en vivo. En el escritorio ya cargado (usuario `contestant`):
+
+- `ip addr show`: `eth0` con IP DHCP real (`192.168.100.157/24`), ruta default correcta.
+- `ps aux | grep udhcp`: **ningún proceso vivo** — la hipótesis del `udhcpc` colgado era incorrecta.
+- `systemctl status connman`: `active (running)`.
+- `connmanctl technologies`: `Wired`, `Powered=True`, `Connected=True`.
+- `connmanctl services`: `*AR Wired` (Ready, no Online — esperado, ya que este laboratorio no tiene salida a internet real desde el master, así que el chequeo `EnableOnlineCheck` de `connman` nunca puede completarse).
+- `ping -c 3 192.168.100.1`: 0% de pérdida, ~0.2-0.8ms.
+- `curl -I http://192.168.100.1/boot.ipxe`: `200 OK`.
+
+**Conclusión:** la red dentro del escritorio ya funciona automáticamente de punta a punta. El problema reportado anteriormente ya no está presente — probablemente se observó en un boot anterior al fix de RAM-copy (intento 7), o antes de que el arranque terminara de asentarse (~2:30 min). No se aplicó ningún cambio de código; no hacía falta.
 
 ## Próximos pasos
 
-1. Diagnosticar por qué `connman` no configura la red dentro del escritorio ya arrancado (¿falta `e1000.ko` en los módulos del sistema completo? ¿`connman` no tiene una regla para traer la interfaz automáticamente en este entorno virtual?).
-2. Una vez con red en el escritorio: implementar el sync de `directives.hdf` contra el master (fuera de alcance hasta ahora).
-3. Implementar el servicio de sync de `event`/`contest` (hoy en RAM) hacia el master, para persistencia real entre sesiones de examen.
-4. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
+1. Implementar el sync de `directives.hdf` contra el master.
+2. Implementar el servicio de sync de `event`/`contest` (hoy en RAM) hacia el master, para persistencia real entre sesiones de examen.
+3. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
 
 ## Referencias
 

@@ -29,6 +29,25 @@ for i in 0 1; do
     fi
 done
 
+echo "[red] Habilitando salida a internet (NAT) para las VMs..."
+WAN_IFACE="$(ip route show default | awk '{print $5; exit}')"
+if [ -z "$WAN_IFACE" ]; then
+    echo "[red] AVISO: no se detectó una interfaz con ruta default; las VMs no tendrán internet, solo red interna."
+else
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+    if ! iptables -t nat -C POSTROUTING -s 192.168.100.0/24 -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -s 192.168.100.0/24 -o "$WAN_IFACE" -j MASQUERADE
+    fi
+    if ! iptables -C FORWARD -i "$BRIDGE" -o "$WAN_IFACE" -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -i "$BRIDGE" -o "$WAN_IFACE" -j ACCEPT
+    fi
+    if ! iptables -C FORWARD -i "$WAN_IFACE" -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+        iptables -A FORWARD -i "$WAN_IFACE" -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    fi
+    echo "[red] NAT $BRIDGE -> $WAN_IFACE configurado (masquerade + forward)."
+fi
+
 echo ""
 echo "[red] Red lista:"
 ip addr show "$BRIDGE"

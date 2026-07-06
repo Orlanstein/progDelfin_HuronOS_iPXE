@@ -33,5 +33,13 @@ if ip link show br-ipxe &>/dev/null; then
     echo "[teardown] br-ipxe eliminado"
 fi
 
+echo "[teardown] Eliminando reglas de NAT/forward..."
+WAN_IFACE="$(ip route show default | awk '{print $5; exit}')"
+if [ -n "$WAN_IFACE" ]; then
+    iptables -t nat -D POSTROUTING -s 192.168.100.0/24 -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -i br-ipxe -o "$WAN_IFACE" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -i "$WAN_IFACE" -o br-ipxe -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+fi
+
 echo ""
 echo "[teardown] Entorno iPXE limpiado."
