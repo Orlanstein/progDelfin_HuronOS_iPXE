@@ -12,6 +12,10 @@
 # los offsets al montar un .sfs de ~5 GiB (justo por encima de la barrera de
 # 4 GiB), causando errores "SQUASHFS error: Unable to read fragment/page" que
 # tumbaban lightdm. Manteniendo el bundle bajo 4 GiB se evita ese bug.
+#
+# Los .hsm de huronOS/software/ se sirven sueltos desde boot/software/ (ver
+# scripts/02b-setup-directives.sh) y se descargan bajo demanda vía el hmm
+# parchado (scripts/02c-build-hmm-layer.sh), no como parte de este bundle.
 # Requiere sudo (mount de la ISO).
 set -e
 
@@ -61,6 +65,16 @@ cp -a "$ISO_MOUNT/EFI" "$STAGE_DIR/"
 cp -a "$ISO_MOUNT/checksums" "$STAGE_DIR/"
 cp -a "$ISO_MOUNT/huronOS/base" "$STAGE_DIR/huronOS/"
 cp -a "$ISO_MOUNT/huronOS/data" "$STAGE_DIR/huronOS/"
+
+# --- 3b. Agregar la capa aditiva con el hmm parchado (fetch de .hsm bajo demanda) ---
+if [ -f "$KERNEL_CACHE/06-netboot-hmm.hsl" ]; then
+    echo "[build] Agregando capa 06-netboot-hmm.hsl (hmm con fetch bajo demanda)..."
+    cp -v "$KERNEL_CACHE/06-netboot-hmm.hsl" "$STAGE_DIR/huronOS/base/06-netboot-hmm.hsl"
+else
+    echo "[AVISO] Falta kernel-cache/06-netboot-hmm.hsl. AvailableSoftware de las"
+    echo "        directivas no podrá activarse. Ejecuta primero:"
+    echo "          ./scripts/02c-build-hmm-layer.sh"
+fi
 
 # --- 4. Generar el bundle del sistema para HTTP netboot ---
 echo "[build] Generando boot/huronos-system.sfs (esto puede tardar)..."

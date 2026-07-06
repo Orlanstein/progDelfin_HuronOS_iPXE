@@ -8,9 +8,9 @@ Que las PCs del laboratorio arranquen HuronOS completo (incluyendo el escritorio
 
 ## Estado actual (2026-07-06)
 
-**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, **con red funcionando automáticamente dentro del escritorio** (DHCP vía `connman`, conectividad confirmada contra el master). Ver intento 9.
+**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, con red funcionando automáticamente dentro del escritorio (DHCP vía `connman`, salida a internet real vía NAT en el host), **y con `directives.hdf` detectándose y aplicándose automáticamente** — allowlist de sitios (firewall), USB, wallpaper, horarios Event/Contest, y software (IDEs/compiladores) descargado bajo demanda. Ver intentos 9-11.
 
-**Pendiente:** implementar el sync de `directives.hdf` y de `event`/`contest` contra el master (Fase 2). Ver "Próximos pasos".
+**Pendiente:** implementar el sync de `event`/`contest` (hoy en RAM) contra el master, para persistencia entre sesiones de examen (Fase 3). Ver "Próximos pasos".
 
 ## Bitácora de intentos
 
@@ -81,11 +81,38 @@ Se arrancó con `debug` agregado a `huronos.flags` para diagnosticar en vivo. En
 
 **Conclusión:** la red dentro del escritorio ya funciona automáticamente de punta a punta. El problema reportado anteriormente ya no está presente — probablemente se observó en un boot anterior al fix de RAM-copy (intento 7), o antes de que el arranque terminara de asentarse (~2:30 min). No se aplicó ningún cambio de código; no hacía falta.
 
+### 10. Salida a internet real desde las VMs
+
+`br-ipxe` era una red completamente aislada (dnsmasq + nginx, sin NAT), así que aunque la conectividad al master funcionaba, no había salida a internet real (`ping 8.8.8.8`/`curl wikipedia.com` se quedaban colgados). Corrección en `scripts/01-setup-network.sh`: detecta automáticamente la interfaz con ruta default del host y agrega `iptables` `MASQUERADE` + `FORWARD` (idempotente, con limpieza correspondiente en `scripts/99-teardown.sh`).
+
+### 11. `directives.hdf`: detección, allowlist, USB, horarios y software (2026-07-06)
+
+Se descubrió que HuronOS **ya trae, dentro de `huronOS/base/01-core.hsl`, el mecanismo completo de directivas** — nunca antes visto porque vive fuera de `install.sh`/`init`:
+
+- `hsync.timer` (habilitado, cada 60s) dispara `hsync.service` → `/usr/lib/hsync/hsync.sh --routine-sync`, que lee `huronOS/data/configs/sync-server.conf` (mismo formato que genera `install.sh`), descarga `directives.hdf` por `wget`, y si cambió, aplica timezone, teclado, wallpaper, bookmarks, y decide el modo activo (`always`/`event`/`contest`) según `[Event-Times]`/`[Contest-Times]`.
+- El firewall/allowlist (`libhfirewall.so`) resuelve por DNS cada dominio de `AllowedWebsites` y arma reglas `iptables` (DROP de entrada + allowlist de esas IPs en los puertos 80/443/8080).
+- El software (`AvailableSoftware`) se activa vía `/usr/sbin/hmm` ("huronOS Module Manager"): monta cada `.hsm` de `huronOS/software/<categoría>/<nombre>.hsm` por loop + lo agrega a la unión AUFS.
+- Sin `sync-server.conf` (nuestro caso hasta ahora), `hsync.sh` caía a `/etc/hsync/default` (`AllowedWebsites=all`) — por eso ya había internet libre antes de este cambio.
+
+Implementación (sin tocar ningún archivo original de HuronOS más de lo estrictamente necesario):
+
+- `directives/directives.hdf`: el ejemplo del usuario, versionado en git (a diferencia de `boot/`).
+- `boot/boot.ipxe`: nuevos flags `directives.url`, `directives.server`, `software.url`.
+- `huronos-patch/livekitlib` (`find_data_netboot()`): sintetiza `sync-server.conf` a partir de esos flags, ya que el netboot nunca corre `install.sh`.
+- `huronos-patch/hmm`: copia parchada de `/usr/sbin/hmm` — si `netboot=true` y el `.hsm` pedido no existe localmente, lo descarga del master antes de montarlo. Empaquetada como capa aditiva `06-netboot-hmm.hsl` (via `scripts/02c-build-hmm-layer.sh`), que se apila por encima de `01-core.hsl` en la unión AUFS gracias a que `union_append_modules()` ya recorre `huronOS/base/*.hsl` en orden alfabético — cero cambios a HuronOS, cero riesgo de reintroducir el bug de los 4 GiB (cada `.hsm` se sirve suelto desde `boot/software/`, nunca en un bundle único).
+- `scripts/02b-setup-directives.sh`: publica `directives.hdf` y extrae el catálogo `.hsm` completo de la ISO a `boot/software/`.
+
+**Dos bugs encontrados y corregidos durante la verificación:**
+- `readlink -f` exige que todos los directorios padre de la ruta ya existan; como `huronOS/software/<categoría>/` no existe hasta que se descarga algo ahí, `MODULE_PATH` se resolvía a `""` antes de que el parche pudiera actuar. Corrección: crear el directorio padre y descargar contra la ruta cruda (`$1`) antes de llamar a `readlink -f`.
+- `cp -a` desde la ISO preservaba permisos root-only, y `nginx` corre como `www-data` dentro del contenedor → 404 al pedir un `.hsm`. Corrección: `chmod -R a+rX` sobre `boot/software/` en `02b-setup-directives.sh`.
+
+Verificado en VM: `directives.hdf` real descargado (no el default), `iptables -L INPUT` con el allowlist resuelto, `hmm --list-modules` mostrando los 10 módulos de `[Always]` montados, y `which gcc chromium` resolviendo binarios reales — sin haber descargado nunca los módulos pesados no solicitados (rider, clion, etc.).
+
 ## Próximos pasos
 
-1. Implementar el sync de `directives.hdf` contra el master.
-2. Implementar el servicio de sync de `event`/`contest` (hoy en RAM) hacia el master, para persistencia real entre sesiones de examen.
-3. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
+1. Implementar el servicio de sync de `event`/`contest` (hoy en RAM) hacia el master, para persistencia real entre sesiones de examen (Fase 3).
+2. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
+3. Probar el modo `event`/`contest` con horarios vigentes (el `directives.hdf` de ejemplo trae fechas de junio 2026, ya pasadas) para verificar el cambio de modo y el bloqueo de USB en `Contest`.
 
 ## Referencias
 

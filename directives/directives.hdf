@@ -1,0 +1,42 @@
+[Global]
+TimeZone=America/Mexico_City
+ConfigExpirationTime=never
+AvailableKeyboardLayouts=latam|us|
+DefaultKeyboardLayout=latam
+EventConfig=true
+ContestConfig=true
+
+[Always]
+# Bloqueo de IAs por exclusión (Lista blanca de navegación permitida)
+AllowedWebsites=google.com|github.com|stackoverflow.com|w3schools.com|wikipedia.org|
+AllowUsbStorage=true
+# Se incluyen VS Code, PyCharm e IntelliJ IDEA
+AvailableSoftware=internet/chromium|internet/firefox|langs/g++|langs/gcc|langs/python3|langs/javac|tools/konsole|programming/vscode|programming/pycharm|programming/intellij|
+Bookmarks={Google^https://google.com}|
+Wallpaper=default
+
+[Event]
+# Modo Clase/Práctica libre sin acceso a herramientas de IA
+AllowedWebsites=google.com|github.com|stackoverflow.com|gcc.gnu.org|python.org|en.cppreference.com|docs.oracle.com|
+AllowUsbStorage=true
+# Entorno completo de desarrollo para las prácticas del laboratorio
+AvailableSoftware=internet/chromium|internet/firefox|langs/g++|langs/gcc|langs/python3|langs/javac|tools/konsole|programming/vscode|programming/vsc-cpptools|programming/vsc-cpp-compile-run|programming/pycharm|programming/intellij|
+Bookmarks={Manual_GCC^https://gcc.gnu.org/onlinedocs/}|{CppReference^https://en.cppreference.com}|
+Wallpaper=default
+
+[Contest]
+# Modo Examen: Bloqueo estricto tradicional (Solo el juez en línea, sin USBs y sin IDEs con autocompletado avanzado)
+AllowedWebsites=omegaup.com|codeforces.com|
+AllowUsbStorage=false
+AvailableSoftware=internet/chromium|langs/g++|langs/gcc|langs/python3|tools/konsole|programming/codeblocks|programming/vim|
+Bookmarks={OmegaUp^https://omegaup.com}|{Codeforces^https://codeforces.com}|
+Wallpaper=default
+
+[Event-Times]
+# Ajusta las fechas y horas a las de tus clases reales (Formato ISO 8601)
+2026-06-29T09:00:00 2026-06-29T18:00:00
+2026-06-30T09:00:00 2026-06-30T18:00:00
+
+[Contest-Times]
+# Horario de exámenes programados
+2026-06-29T11:00:00 2026-06-29T14:00:00

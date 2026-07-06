@@ -35,6 +35,10 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 │                     /vmlinuz-*-huronos+    ← kernel recompilado (con e1000/e1000e)
 │                     /initrfs.img           ← initrd recompilado (NETWORK=true + parche netboot)
 │                     /huronos-system.sfs    ← bundle del sistema completo (squashfs de la ISO)
+│                     /directives.hdf        ← directivas del examen (allowlist, USB, software, horarios)
+│                     /software/*.hsm        ← catálogo de IDEs/compiladores, servidos sueltos
+│
+├── NAT (iptables MASQUERADE br-ipxe → interfaz con internet del host)
 │
 ├── tap0 ──► QEMU slave1  (KVM, 6 GB RAM, SDL)
 └── tap1 ──► QEMU slave2  (KVM, 6 GB RAM, SDL)
@@ -53,8 +57,11 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 8. find_data_netboot →  modprobe e1000 (¡ahora sí existe!), DHCP, mount_data_http() monta
                         huronos-system.sfs via httpfs2 (FUSE) + loop
 9. init              →  ensambla el union AUFS con las capas de huronOS/base/*.hsl
+                        (incluye la capa aditiva 06-netboot-hmm.hsl, ver más abajo)
 10. init              →  event/contest montados como tmpfs (RAM)
 11. Sistema           →  HuronOS listo, pivot_root + chroot a systemd
+12. systemd           →  hsync.timer (ya viene habilitado en HuronOS) descarga
+                        directives.hdf del master y aplica allowlist/USB/software/horarios
 ```
 
 ---
@@ -80,16 +87,24 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 progDelfin_iPXE/
 ├── huronOS-alpha-0.4-amd64.iso   ← ISO fuente (no en git)
 ├── huronos-patch/
-│   └── livekitlib                 ← único archivo modificado de HuronOS: agrega
-│                                     find_data_netboot() y tmpfs para event/contest
-├── kernel-cache/                  ← salida de 00-build-kernel.sh (no en git)
+│   ├── livekitlib                 ← modifica lib/livekitlib del initrd: agrega
+│   │                                 find_data_netboot(), tmpfs para event/contest,
+│   │                                 y la síntesis de sync-server.conf
+│   └── hmm                        ← copia parchada de /usr/sbin/hmm: descarga un
+│                                     .hsm del master bajo demanda si no existe local
+├── directives/
+│   └── directives.hdf             ← directivas del examen (editar aquí entre exámenes)
+├── kernel-cache/                  ← salida de 00-build-kernel.sh / 02c (no en git)
 │   ├── vmlinuz-6.0.15-huronos+    ← kernel recompilado con NETWORK=true
-│   └── initrfs.img                ← initrd recompilado con el parche aplicado
+│   ├── initrfs.img                ← initrd recompilado con huronos-patch/livekitlib
+│   └── 06-netboot-hmm.hsl         ← capa aditiva con huronos-patch/hmm
 ├── boot/                          ← archivos servidos por nginx (generados)
 │   ├── boot.ipxe                  ← script de arranque iPXE
 │   ├── vmlinuz-6.0.15-huronos+
 │   ├── initrfs.img
-│   └── huronos-system.sfs
+│   ├── huronos-system.sfs
+│   ├── directives.hdf             ← copia de directives/directives.hdf
+│   └── software/<categoria>/*.hsm ← catálogo completo extraído de la ISO
 ├── master/
 │   ├── Dockerfile                 ← imagen Docker del master
 │   ├── dnsmasq.conf                ← DHCP + detección iPXE
@@ -98,8 +113,11 @@ progDelfin_iPXE/
 ├── docker-compose.yml
 └── scripts/
     ├── 00-build-kernel.sh           ← (una sola vez) recompila el kernel con NETWORK=true
-    ├── 01-setup-network.sh          ← crea br-ipxe, tap0, tap1
+    ├── 00b-rebuild-initrd.sh        ← reconstruye solo el initrd (sin recompilar el kernel)
+    ├── 01-setup-network.sh          ← crea br-ipxe, tap0, tap1 + NAT a internet
     ├── 02-build-huronos-boot.sh     ← copia kernel-cache/ a boot/ y genera el .sfs
+    ├── 02b-setup-directives.sh      ← publica directives.hdf y boot/software/*.hsm
+    ├── 02c-build-hmm-layer.sh       ← empaqueta huronos-patch/hmm en 06-netboot-hmm.hsl
     ├── 03-start-master.sh           ← docker compose up
     ├── 04-start-slave1.sh           ← QEMU slave 1 (tap0)
     ├── 04-start-slave2.sh           ← QEMU slave 2 (tap1)
@@ -134,7 +152,16 @@ Crea el bridge `br-ipxe` (192.168.100.1/24) y las interfaces TAP `tap0` y `tap1`
 sudo ./scripts/02-build-huronos-boot.sh
 ```
 
-Copia `kernel-cache/` a `boot/` y genera `boot/huronos-system.sfs` (squashfs de toda la ISO, servido por HTTP y consumido via `httpfs2` dentro del initrd). Repetir si cambia la ISO.
+Copia `kernel-cache/` a `boot/` y genera `boot/huronos-system.sfs` (squashfs de toda la ISO, servido por HTTP y consumido via `httpfs2` dentro del initrd). Repetir si cambia la ISO. Si `kernel-cache/06-netboot-hmm.hsl` no existe, este paso avisa — correr antes `./scripts/02c-build-hmm-layer.sh`.
+
+### 3b. Directivas del examen y catálogo de software
+
+```bash
+./scripts/02c-build-hmm-layer.sh      # una sola vez (o si cambia huronos-patch/hmm)
+sudo ./scripts/02b-setup-directives.sh
+```
+
+Publica `directives/directives.hdf` en `boot/directives.hdf`, y extrae todo `huronOS/software/*.hsm` de la ISO a `boot/software/` (archivos sueltos, servidos por nginx — el mecanismo nativo de HuronOS, `hmm`/`hsync`, descarga bajo demanda solo los que las directivas activas piden). Editar `directives/directives.hdf` y volver a correr `02b-setup-directives.sh` es suficiente para publicar cambios de directivas entre exámenes; no requiere reconstruir el kernel/initrd/sfs.
 
 ### 4. Master (DHCP + HTTP)
 
@@ -174,22 +201,28 @@ Detiene el contenedor Docker, desmonta la ISO si quedó montada, y elimina `tap0
 
 ---
 
-## El parche `huronos-patch/livekitlib`
+## Los parches locales sobre HuronOS
 
-Es una extensión local sobre HuronOS estándar, no parte del upstream oficial. Modifica únicamente `lib/livekitlib` dentro del initrd:
+Ambos son extensiones aditivas, no parte del upstream oficial, y el camino original (USB física + `install.sh`) no se toca en ninguno de los dos: cada rama nueva solo se activa cuando el kernel recibe `huronos.flags=(netboot=true;...)`.
 
-- **`find_data()`**: si `huronos.flags` trae `netboot=true`, delega a `find_data_netboot()` en vez de buscar un dispositivo físico por UUID. Reutiliza `mount_data_http()` (ya existente en HuronOS, heredado de Slax, nunca usado) para descargar `huronos-system.sfs` vía FUSE/httpfs2 y montarlo por loop device.
+### `huronos-patch/livekitlib` (modifica `lib/livekitlib` del initrd)
+
+- **`find_data()`**: si `netboot=true`, delega a `find_data_netboot()` en vez de buscar un dispositivo físico por UUID. Reutiliza `mount_data_http()` (ya existente en HuronOS, heredado de Slax, nunca usado) para descargar `huronos-system.sfs` vía FUSE/httpfs2 + loop, y lo copia a una segunda `tmpfs` para evitar el bug de "loop sobre loop sobre FUSE" (ver `PROGRESO.md`, intento 7).
 - **`persistent_changes()`**: si `netboot=true`, monta `event`/`contest` como `tmpfs` en vez de buscar particiones físicas por UUID.
+- Sintetiza `huronOS/data/configs/sync-server.conf` (mismo formato que genera `install.sh`) a partir de los flags `directives.url`/`directives.server`, ya que el netboot nunca corre `install.sh`.
 
-El camino original (USB física + `install.sh`) no se toca: ambas ramas conviven, seleccionadas por el flag `netboot`.
+### `huronos-patch/hmm` (copia parchada de `/usr/sbin/hmm`, empaquetada como capa `06-netboot-hmm.hsl`)
+
+HuronOS ya trae, dentro de `huronOS/base/01-core.hsl`, el mecanismo completo de directivas — `hsync.timer`/`hsync.service`/`happly.service` descargan `directives.hdf` cada 60s y aplican timezone, wallpaper, horarios `Event`/`Contest`, el firewall/allowlist (`AllowedWebsites`, vía `iptables`), USB (`AllowUsbStorage`), y software (`AvailableSoftware`, vía `hmm`). Nada de esto se tuvo que reconstruir.
+
+Lo único que falta en netboot es que `huronOS/software/*.hsm` (los módulos de IDEs/compiladores que `hmm` monta) no viajan dentro de `huronos-system.sfs` — se excluyeron deliberadamente por el bug de los 4 GiB (ver abajo). `huronos-patch/hmm` agrega, dentro de `activate()`, un fetch bajo demanda: si `netboot=true` y el `.hsm` pedido no existe localmente, se descarga del master (`software.url`) antes de montarlo — solo los módulos que las directivas activas realmente piden, nunca el catálogo completo. Se apila como `huronOS/base/06-netboot-hmm.hsl`, por encima de `01-core.hsl` en la unión AUFS (gracias a que `union_append_modules()` ya recorre `huronOS/base/*.hsl` en orden alfabético), sin modificar ningún archivo original de HuronOS.
 
 ---
 
 ## Trabajo futuro (fuera de este proyecto por ahora)
 
-- Sincronizar `event`/`contest` (hoy en RAM) hacia el servidor master mediante un servicio periódico (POST por HTTP), implementado en la capa `05-custom.hsl` una vez arrancado el sistema completo.
-- Servir `directives.hdf` desde el master y automatizar el flujo `--directives-url`/`--directives-server-ip` de `install.sh` para la sincronización de configuración del examen.
-- Los módulos de software (`huronOS/software/*.hsm`: IDEs, lenguajes, navegadores) no se incluyen hoy en `huronos-system.sfs` (ver "El bug de los 4 GiB" abajo). Para tenerlos disponibles en netboot hace falta un mecanismo de montaje bajo demanda (otro `.sfs` separado por debajo de 4 GiB cada uno, o un transporte distinto a `httpfs2`).
+- Sincronizar `event`/`contest` (hoy en RAM) hacia el servidor master mediante un servicio periódico (POST por HTTP), para persistencia real entre sesiones de examen.
+- Optimizar el tiempo de arranque (~2:30 min hoy, copiando `huronos-system.sfs` completo a RAM sin caché).
 
 ---
 
@@ -224,3 +257,6 @@ Agrega `debug` a `huronos.flags` (imita el label `debug` de `boot/huronos.cfg` d
 | `00-build-kernel.sh` falla en la compilación | Revisar `build.log` dentro del contenedor (el script lo imprime en pantalla); suele ser falta de espacio en disco | Verificar espacio libre antes de lanzar el build |
 | ISO no se monta al reiniciar el host | El montaje loop no persiste entre reinicios | Repetir `sudo ./scripts/02-build-huronos-boot.sh` |
 | `lightdm.service` falla con `203/EXEC`, `journalctl` muestra `SQUASHFS error: Unable to read fragment/page` en el mismo bloque siempre | `huronos-system.sfs` pesaba > 4 GiB; `mount.httpfs2` (binario de 32 bits) trunca offsets cerca del final del archivo, corrompiendo la tabla de fragmentos de squashfs | Ya corregido: `02-build-huronos-boot.sh` solo empaqueta `huronOS/base`+`huronOS/data`+`boot`+`EFI`+`checksums` (sin `huronOS/software/`), quedando muy por debajo de 4 GiB. Si el `.sfs` vuelve a acercarse a 4 GiB, revisar qué se está incluyendo |
+| No hay internet real dentro de la VM (solo conectividad al master) | Falta NAT del bridge `br-ipxe` hacia la interfaz con internet del host | `sudo ./scripts/01-setup-network.sh` (idempotente, agrega `MASQUERADE`+`FORWARD` automáticamente) |
+| `hsync.log` muestra `!huronOS module not found: ` con la ruta **vacía** | `readlink -f` exige que los directorios padre ya existan; `huronOS/software/<categoria>/` no existe hasta que se descarga algo ahí | Ya corregido en `huronos-patch/hmm`: crea el directorio padre y descarga contra la ruta cruda antes de resolver con `readlink -f` |
+| Un `.hsm` pedido en `AvailableSoftware` da `404` al descargarlo (`curl -I http://.../software/...` confirma) | `cp -a` desde la ISO preserva permisos root-only; `nginx` corre como `www-data` dentro del contenedor | Ya corregido en `02b-setup-directives.sh`: `chmod -R a+rX` sobre `boot/software/` tras copiar |

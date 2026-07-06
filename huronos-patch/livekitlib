@@ -599,6 +599,24 @@ find_data_netboot() {
 			umount "$SYSTEM_MNT" 2>/dev/null
 			mount --bind "$RAMCOPY" "$SYSTEM_MNT"
 
+			## huronOS-lab-network extension: install.sh normally writes this
+			## file at USB-creation time so hsync.sh/happly.sh (already enabled
+			## in the full system, see huronOS/base/01-core.hsl) know where to
+			## fetch directives.hdf from. Our netboot path never runs install.sh,
+			## so synthesize it here from the same huronos.flags mechanism used
+			## for everything else.
+			mkdir -p "$SYSTEM_MNT/huronOS/data/configs"
+			cat >"$SYSTEM_MNT/huronOS/data/configs/sync-server.conf" <<-EOF
+			[Server]
+			INSTANCE_IP_ADDRESS=
+			INSTANCE_IP_MASK=
+			INSTANCE_IP_GATEWAY=
+			DIRECTIVES_ENDPOINT=
+			SERVER_ROOM=
+			DIRECTIVES_FILE_URL=$(cmdline_value directives.url)
+			DIRECTIVES_SERVER_IP=$(cmdline_value directives.server)
+			EOF
+
 			echo "* System data mounted from $SYSTEM_URL" >&2
 			return
 		fi
