@@ -38,5 +38,8 @@ Wallpaper=default
 2026-06-30T09:00:00 2026-06-30T18:00:00
 
 [Contest-Times]
-# Horario de exámenes programados
-2026-06-29T11:00:00 2026-06-29T14:00:00
+# Prueba real: hoy 2026-07-11 17:00 -> mañana 2026-07-12 17:00 (America/Mexico_City,
+# TimeZone del [Global] de este archivo). Contest tiene prioridad sobre Event si se
+# solapan (ver select_mode_to_apply en libhapply.so), así que durante esta ventana
+# el sistema debe quedar en modo Contest sin importar [Event-Times].
+2026-07-11T17:00:00 2026-07-12T17:00:00
