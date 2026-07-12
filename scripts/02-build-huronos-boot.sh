@@ -76,6 +76,16 @@ else
     echo "          ./scripts/02c-build-hmm-layer.sh"
 fi
 
+# --- 3c. Agregar la capa aditiva de hnetsync (persistencia event/contest al master) ---
+if [ -f "$KERNEL_CACHE/07-hnetsync.hsl" ]; then
+    echo "[build] Agregando capa 07-hnetsync.hsl (persistencia event/contest al master)..."
+    cp -v "$KERNEL_CACHE/07-hnetsync.hsl" "$STAGE_DIR/huronOS/base/07-hnetsync.hsl"
+else
+    echo "[AVISO] Falta kernel-cache/07-hnetsync.hsl. El trabajo de event/contest no se"
+    echo "        respaldará en el master entre sesiones. Ejecuta primero:"
+    echo "          ./scripts/02e-build-hnetsync-layer.sh"
+fi
+
 # --- 4. Generar el bundle del sistema para HTTP netboot ---
 echo "[build] Generando boot/huronos-system.sfs (esto puede tardar)..."
 rm -f "$BOOT_DIR/huronos-system.sfs"

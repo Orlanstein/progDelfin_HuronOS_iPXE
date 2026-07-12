@@ -737,12 +737,75 @@ persistent_changes() {
 	if cmdline_has netboot; then
 		## huronOS-lab-network extension: there is no physical event/contest
 		## partition when netbooting, so keep exam data in RAM for the
-		## duration of the session. Syncing it back to the master server is
-		## handled by a service that runs after chroot, not by this initrd.
+		## duration of the session, restoring the last backup from the
+		## master (if any) right here.
+		##
+		## This restore MUST happen in the initrd, before pivot_root, and
+		## NOT from a systemd service after chroot: hsync.sh decides if this
+		## is "the first boot run" by checking /proc/uptime < 60s
+		## (system_has_just_booted() in libhsystem.so, unmodified). A
+		## systemd service that waits on network-online.target (needed to
+		## reach the master) can easily push hsync.service's first real
+		## execution past that 60s mark; HuronOS then treats it as a
+		## routine (non-first) run, skips restore_state_from_disk()/
+		## start_persistence() entirely, finds STATE_MODE=none, and "for
+		## security" starts a fresh always-mode layer -- wiping out whatever
+		## we just restored via start_always_mode()/*_to_contest(). Doing it
+		## here, long before systemd starts counting that uptime, avoids
+		## the race completely. See PROGRESO.md.
 		mount -t tmpfs tmpfs "$EVENT_MNT"
 		mount -t tmpfs tmpfs "$CONTEST_MNT"
 		echo "* Event data storage kept in RAM (netboot mode)"
 		echo "* Contest data storage kept in RAM (netboot mode)"
+
+		NETSYNC_LOG="$SYSCHANGES/var/log/hnetsync-initrd.log"
+		mkdir -p "$(dirname "$NETSYNC_LOG")"
+		netsync_log() {
+			echo "[$(date -Is 2>/dev/null || date)] $*" | tee -a "$NETSYNC_LOG"
+		}
+
+		NETSYNC_SERVER_IP="$(cmdline_value directives.server)"
+		netsync_log "directives.server=$NETSYNC_SERVER_IP"
+		if [ -n "$NETSYNC_SERVER_IP" ]; then
+			NETSYNC_MACHINE_ID=""
+			for NETSYNC_ADDR_FILE in /sys/class/net/*/address; do
+				NETSYNC_IFACE="$(basename "$(dirname "$NETSYNC_ADDR_FILE")")"
+				[ "$NETSYNC_IFACE" = "lo" ] && continue
+				NETSYNC_MACHINE_ID="$(tr -d ':' <"$NETSYNC_ADDR_FILE" | tr 'A-Z' 'a-z')"
+				[ -n "$NETSYNC_MACHINE_ID" ] && break
+			done
+			netsync_log "MACHINE_ID=$NETSYNC_MACHINE_ID"
+
+			if [ -n "$NETSYNC_MACHINE_ID" ]; then
+				for NETSYNC_DISK in event contest; do
+					case "$NETSYNC_DISK" in
+					event) NETSYNC_MNT="$EVENT_MNT" ;;
+					contest) NETSYNC_MNT="$CONTEST_MNT" ;;
+					esac
+					NETSYNC_TMP="/tmp/hnetsync-$NETSYNC_DISK.tar.gz"
+					NETSYNC_URL="http://$NETSYNC_SERVER_IP/sync/$NETSYNC_MACHINE_ID/$NETSYNC_DISK.tar.gz"
+					netsync_log "GET $NETSYNC_URL -> $NETSYNC_TMP"
+					if wget -O "$NETSYNC_TMP" "$NETSYNC_URL" >>"$NETSYNC_LOG" 2>&1; then
+						netsync_log "wget OK, size=$(stat -c %s "$NETSYNC_TMP" 2>/dev/null || echo '?')"
+						if gzip -t "$NETSYNC_TMP" 2>>"$NETSYNC_LOG"; then
+							## busybox tar en este initrd no soporta "-z" aunque
+							## gzip/gunzip existan como applets aparte -- hay que
+							## descomprimir con gzip y pasarle el stream a tar.
+							gzip -dc "$NETSYNC_TMP" | tar x -C "$NETSYNC_MNT" -f - >>"$NETSYNC_LOG" 2>&1
+							netsync_log "tar exit=$? -- Restaurado respaldo de $NETSYNC_DISK en $NETSYNC_MNT"
+							netsync_log "contenido de $NETSYNC_MNT: $(ls -la "$NETSYNC_MNT" 2>&1 | tr '\n' ';')"
+						else
+							netsync_log "Respaldo de $NETSYNC_DISK descargado pero invalido (gzip -t fallo), se descarta"
+						fi
+					else
+						netsync_log "wget fallo (exit=$?) -- Sin respaldo previo de $NETSYNC_DISK (o el master no respondio)"
+					fi
+					rm -f "$NETSYNC_TMP"
+				done
+			else
+				netsync_log "No se pudo determinar MACHINE_ID (MAC), no se restaura persistencia previa"
+			fi
+		fi
 	else
 		# Mount removable devices for persistence, they will not be used
 		# by initramfs as we don't want them so store system files that will

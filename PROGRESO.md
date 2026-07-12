@@ -6,11 +6,11 @@ Registro cronológico del trabajo de reemplazar Ubuntu/casper por HuronOS arranc
 
 Que las PCs del laboratorio arranquen HuronOS completo (incluyendo el escritorio Budgie) directamente por red, sin instalar una memoria USB por equipo, usando la infraestructura iPXE ya existente en este proyecto (dnsmasq + nginx + QEMU).
 
-## Estado actual (2026-07-06)
+## Estado actual (2026-07-11)
 
-**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, con red funcionando automáticamente dentro del escritorio (DHCP vía `connman`, salida a internet real vía NAT en el host), **y con `directives.hdf` detectándose y aplicándose automáticamente** — allowlist de sitios (firewall), USB, wallpaper, horarios Event/Contest, y software (IDEs/compiladores) descargado bajo demanda. Ver intentos 9-11.
+**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, con red funcionando automáticamente dentro del escritorio (DHCP vía `connman`, salida a internet real vía NAT en el host), **`directives.hdf` detectándose y aplicándose automáticamente** (allowlist de sitios, USB, wallpaper, horarios Event/Contest, software bajo demanda), **y ahora también el trabajo de `event`/`contest` persistiendo entre sesiones vía sync con el master** (`hnetsync`). Ver intentos 9-12. Probado con un horario de `Contest` real (no fechas de ejemplo ya pasadas): cambio de modo, bloqueo de USB, allowlist estricto, y sobrevivencia de archivos del usuario tras apagar/prender la VM, todo verificado en vivo.
 
-**Pendiente:** implementar el sync de `event`/`contest` (hoy en RAM) contra el master, para persistencia entre sesiones de examen (Fase 3). Ver "Próximos pasos".
+**Pendiente:** optimizar el tiempo de arranque (~2:30 min hoy) y correr una prueba similar en modo `Event`. Ver "Próximos pasos".
 
 ## Bitácora de intentos
 
@@ -108,11 +108,30 @@ Implementación (sin tocar ningún archivo original de HuronOS más de lo estric
 
 Verificado en VM: `directives.hdf` real descargado (no el default), `iptables -L INPUT` con el allowlist resuelto, `hmm --list-modules` mostrando los 10 módulos de `[Always]` montados, y `which gcc chromium` resolviendo binarios reales — sin haber descargado nunca los módulos pesados no solicitados (rider, clion, etc.).
 
+### 12. `hnetsync`: sync de `event`/`contest` con el master (2026-07-11/12)
+
+`libhpersistence.so` (HuronOS original, sin modificar) espera particiones físicas `event`/`contest` para persistir el trabajo del contestant entre encendidos. En netboot, `huronos-patch/livekitlib` las monta como `tmpfs` (RAM), así que todo se perdía al apagar la VM. Se implementó un mecanismo de sync con el master:
+
+- **Master**: `master/sync-server.py` (stdlib puro, `127.0.0.1:8081`) — `PUT`/`GET /sync/<machine-id>/<disk>.tar.gz`, con `machine-id`/`disk` validados por regex. Expuesto en el puerto 80 vía `location /sync/` en `nginx.conf` (proxy a loopback) para quedar dentro del allowlist de firewall que aplican las directivas (`libhfirewall.so` solo permite `INPUT` de vuelta en sport 80/443/8080). Persistencia real en `sync-data/` (volumen Docker).
+- **Guardar (push)**: `huronos-patch/hnetsync/usr/local/sbin/hnetsync-push`, enganchado vía *drop-ins* systemd (`hsync.service.d/`, `happly.service.d/`, más un `hnetsync-push-shutdown.service` para el apagado) — cero ediciones a archivos originales de HuronOS.
+- **Restaurar (pull)**: vive en el **initrd**, dentro de `persistent_changes()` (`huronos-patch/livekitlib`), justo después de montar los `tmpfs` de `event`/`contest`.
+- **Identidad de máquina**: MAC de la interfaz de red (se detectó que `04-start-slave1.sh`/`04-start-slave2.sh` no fijaban `mac=`, así que QEMU les daba la misma por defecto — corregido con `52:54:00:12:34:01`/`:02`).
+
+**Tres bugs reales encontrados en la verificación en vivo (ninguno se ve con solo leer el código):**
+
+1. **La ventana de 60s de `system_has_just_booted()`** (`libhsystem.so`, sin modificar): decide "¿acabo de arrancar?" mirando `/proc/uptime < 60s`. El primer diseño ponía el `pull` en un `.service` systemd que esperaba a `network-online.target` antes de que `hsync.service` corriera — eso empujaba la primera ejecución de `hsync.service` más allá de los 60s, HuronOS lo trataba como arranque rutinario (no el primero), se saltaba `restore_state_from_disk()`/`start_persistence()` por completo, encontraba `STATE_MODE=none`, y por seguridad reconstruía todo desde cero en modo `always` — **borrando en cascada, vía `start_always_mode()`/`always_to_contest()`, lo que se acababa de restaurar.** Mover el `pull` al initrd (antes de que systemd empiece a contar) evita competir por esa ventana.
+2. **La ventana de 60s en sí es poco realista en este netboot**: el arranque completo (kernel + initrd + descarga HTTP + descompresión del squashfs) ya tarda bastante más de 60s por sí solo, con o sin el pull. Corrección: capa aditiva `07-hnetsync.hsl` con una copia parchada de `/usr/lib/hsync/libhsystem.so` (mismo patrón que `huronos-patch/hmm`) — `system_has_just_booted()` usa un marcador de una sola vez por arranque (`/run/hsync/netboot-first-run-done`) en vez de `/proc/uptime`, **solo si `netboot=true`**; el camino físico (USB) queda byte-idéntico al original.
+3. **`tar -z` no soportado por el busybox de este initrd** (v1.26.2): aunque `gzip`/`gunzip`/`tar` existen como applets separados, la combinación `tar xzf` fallaba con `tar: invalid option -- z` (silenciosamente, el script no revisaba el código de salida). Corrección: `gzip -dc archivo.tar.gz | tar x -C DIR -f -`.
+
+Se agregó además un log propio (`/var/log/hnetsync-initrd.log`, escrito directamente en `$SYSCHANGES` para sobrevivir al `pivot_root`) — fue indispensable para diagnosticar el bug #3, ya que `journalctl`/`dmesg` no capturan la salida de consola del initrd.
+
+**Verificado en vivo, extremo a extremo:** con `directives.hdf` apuntando a una ventana de `Contest` real (no fechas de ejemplo ya pasadas), la VM cambió correctamente a modo `contest` (allowlist estricto, USB bloqueado, software de la lista de Contest activado), un archivo creado por el usuario sobrevivió un apagado+encendido completo de la VM, y `restore_state_from_disk` reportó "preserving changes" (sin transición destructiva) en el segundo arranque.
+
 ## Próximos pasos
 
-1. Implementar el servicio de sync de `event`/`contest` (hoy en RAM) hacia el master, para persistencia real entre sesiones de examen (Fase 3).
-2. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
-3. Probar el modo `event`/`contest` con horarios vigentes (el `directives.hdf` de ejemplo trae fechas de junio 2026, ya pasadas) para verificar el cambio de modo y el bloqueo de USB en `Contest`.
+1. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
+2. Repetir la prueba de horario vigente en modo `Event` (ya se probó a fondo `Contest`, ver intento 12).
+3. Fijar MACs distintas para más de 2 VMs si se agregan más `slaveN` al laboratorio simulado (hoy solo `slave1`/`slave2` tienen `mac=` fija).
 
 ## Referencias
 

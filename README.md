@@ -30,18 +30,21 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 ├── Docker "ipxe-master"  (--network=host)
 │   ├── dnsmasq  ─── DHCP  → asigna IPs al rango .100-.200
 │   │               ─── iPXE → entrega URL del script de arranque
-│   └── nginx    ─── HTTP :80
-│                     /boot.ipxe             ← script iPXE
-│                     /vmlinuz-*-huronos+    ← kernel recompilado (con e1000/e1000e)
-│                     /initrfs.img           ← initrd recompilado (NETWORK=true + parche netboot)
-│                     /huronos-system.sfs    ← bundle del sistema completo (squashfs de la ISO)
-│                     /directives.hdf        ← directivas del examen (allowlist, USB, software, horarios)
-│                     /software/*.hsm        ← catálogo de IDEs/compiladores, servidos sueltos
+│   ├── nginx    ─── HTTP :80
+│   │                 /boot.ipxe             ← script iPXE
+│   │                 /vmlinuz-*-huronos+    ← kernel recompilado (con e1000/e1000e)
+│   │                 /initrfs.img           ← initrd recompilado (NETWORK=true + parche netboot)
+│   │                 /huronos-system.sfs    ← bundle del sistema completo (squashfs de la ISO)
+│   │                 /directives.hdf        ← directivas del examen (allowlist, USB, software, horarios)
+│   │                 /software/*.hsm        ← catálogo de IDEs/compiladores, servidos sueltos
+│   │                 /sync/<mac>/*.tar.gz   ← proxy a sync-server.py (persistencia event/contest)
+│   └── sync-server.py (127.0.0.1:8081) ─── PUT/GET del respaldo event/contest por MAC
+│                     → sync-data/<mac>/{event,contest}.tar.gz (volumen persistente en el host)
 │
 ├── NAT (iptables MASQUERADE br-ipxe → interfaz con internet del host)
 │
-├── tap0 ──► QEMU slave1  (KVM, 6 GB RAM, SDL)
-└── tap1 ──► QEMU slave2  (KVM, 6 GB RAM, SDL)
+├── tap0 ──► QEMU slave1  (KVM, 6 GB RAM, SDL, mac=52:54:00:12:34:01)
+└── tap1 ──► QEMU slave2  (KVM, 6 GB RAM, SDL, mac=52:54:00:12:34:02)
 ```
 
 ### Cadena de arranque completa
@@ -57,11 +60,16 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 8. find_data_netboot →  modprobe e1000 (¡ahora sí existe!), DHCP, mount_data_http() monta
                         huronos-system.sfs via httpfs2 (FUSE) + loop
 9. init              →  ensambla el union AUFS con las capas de huronOS/base/*.hsl
-                        (incluye la capa aditiva 06-netboot-hmm.hsl, ver más abajo)
-10. init              →  event/contest montados como tmpfs (RAM)
+                        (incluye 06-netboot-hmm.hsl y 07-hnetsync.hsl, ver más abajo)
+10. init              →  event/contest montados como tmpfs (RAM), luego persistent_changes()
+                        restaura el último respaldo de esta MAC desde /sync/ en el master
+                        (hnetsync-pull, corre aquí y no después vía systemd — ver PROGRESO.md,
+                        intento 12, sobre la ventana de 60s de system_has_just_booted())
 11. Sistema           →  HuronOS listo, pivot_root + chroot a systemd
 12. systemd           →  hsync.timer (ya viene habilitado en HuronOS) descarga
-                        directives.hdf del master y aplica allowlist/USB/software/horarios
+                        directives.hdf del master y aplica allowlist/USB/software/horarios;
+                        al terminar cada ciclo, hnetsync-push sube event/contest al master
+                        (drop-in sobre hsync.service/happly.service, más un service al apagar)
 ```
 
 ---
@@ -89,15 +97,24 @@ progDelfin_iPXE/
 ├── huronos-patch/
 │   ├── livekitlib                 ← modifica lib/livekitlib del initrd: agrega
 │   │                                 find_data_netboot(), tmpfs para event/contest,
-│   │                                 y la síntesis de sync-server.conf
-│   └── hmm                        ← copia parchada de /usr/sbin/hmm: descarga un
-│                                     .hsm del master bajo demanda si no existe local
+│   │                                 la síntesis de sync-server.conf, y la restauración
+│   │                                 (pull) del respaldo event/contest desde el master
+│   ├── hmm                        ← copia parchada de /usr/sbin/hmm: descarga un
+│   │                                 .hsm del master bajo demanda si no existe local
+│   └── hnetsync/                  ← árbol para la capa 07-hnetsync.hsl:
+│       ├── usr/local/sbin/hnetsync-push     ← sube event/contest al master
+│       ├── usr/lib/hsync/libhsystem.so      ← copia parchada: system_has_just_booted()
+│       │                                       usa un marcador de arranque en netboot
+│       │                                       en vez de /proc/uptime (ver PROGRESO.md)
+│       └── etc/systemd/system/    ← hnetsync-push-shutdown.service + drop-ins sobre
+│                                     hsync.service/happly.service (ExecStopPost=)
 ├── directives/
 │   └── directives.hdf             ← directivas del examen (editar aquí entre exámenes)
-├── kernel-cache/                  ← salida de 00-build-kernel.sh / 02c (no en git)
+├── kernel-cache/                  ← salida de 00-build-kernel.sh / 02c / 02e (no en git)
 │   ├── vmlinuz-6.0.15-huronos+    ← kernel recompilado con NETWORK=true
 │   ├── initrfs.img                ← initrd recompilado con huronos-patch/livekitlib
-│   └── 06-netboot-hmm.hsl         ← capa aditiva con huronos-patch/hmm
+│   ├── 06-netboot-hmm.hsl         ← capa aditiva con huronos-patch/hmm
+│   └── 07-hnetsync.hsl            ← capa aditiva con huronos-patch/hnetsync
 ├── boot/                          ← archivos servidos por nginx (generados)
 │   ├── boot.ipxe                  ← script de arranque iPXE
 │   ├── vmlinuz-6.0.15-huronos+
@@ -105,11 +122,14 @@ progDelfin_iPXE/
 │   ├── huronos-system.sfs
 │   ├── directives.hdf             ← copia de directives/directives.hdf
 │   └── software/<categoria>/*.hsm ← catálogo completo extraído de la ISO
+├── sync-data/                     ← respaldos event/contest por MAC (no en git, generado)
+│   └── <mac>/{event,contest}.tar.gz
 ├── master/
 │   ├── Dockerfile                 ← imagen Docker del master
 │   ├── dnsmasq.conf                ← DHCP + detección iPXE
-│   ├── nginx.conf                  ← servidor HTTP de archivos de boot
-│   └── entrypoint.sh               ← arranca nginx + dnsmasq
+│   ├── nginx.conf                  ← servidor HTTP de archivos de boot + proxy /sync/
+│   ├── sync-server.py              ← recibe/sirve los respaldos event/contest (127.0.0.1:8081)
+│   └── entrypoint.sh               ← arranca nginx + dnsmasq + sync-server.py
 ├── docker-compose.yml
 └── scripts/
     ├── 00-build-kernel.sh           ← (una sola vez) recompila el kernel con NETWORK=true
@@ -118,9 +138,10 @@ progDelfin_iPXE/
     ├── 02-build-huronos-boot.sh     ← copia kernel-cache/ a boot/ y genera el .sfs
     ├── 02b-setup-directives.sh      ← publica directives.hdf y boot/software/*.hsm
     ├── 02c-build-hmm-layer.sh       ← empaqueta huronos-patch/hmm en 06-netboot-hmm.hsl
+    ├── 02e-build-hnetsync-layer.sh  ← empaqueta huronos-patch/hnetsync en 07-hnetsync.hsl
     ├── 03-start-master.sh           ← docker compose up
-    ├── 04-start-slave1.sh           ← QEMU slave 1 (tap0)
-    ├── 04-start-slave2.sh           ← QEMU slave 2 (tap1)
+    ├── 04-start-slave1.sh           ← QEMU slave 1 (tap0, mac=52:54:00:12:34:01)
+    ├── 04-start-slave2.sh           ← QEMU slave 2 (tap1, mac=52:54:00:12:34:02)
     └── 99-teardown.sh               ← limpieza total
 ```
 
@@ -158,10 +179,13 @@ Copia `kernel-cache/` a `boot/` y genera `boot/huronos-system.sfs` (squashfs de 
 
 ```bash
 ./scripts/02c-build-hmm-layer.sh      # una sola vez (o si cambia huronos-patch/hmm)
+./scripts/02e-build-hnetsync-layer.sh # una sola vez (o si cambia huronos-patch/hnetsync)
 sudo ./scripts/02b-setup-directives.sh
 ```
 
 Publica `directives/directives.hdf` en `boot/directives.hdf`, y extrae todo `huronOS/software/*.hsm` de la ISO a `boot/software/` (archivos sueltos, servidos por nginx — el mecanismo nativo de HuronOS, `hmm`/`hsync`, descarga bajo demanda solo los que las directivas activas piden). Editar `directives/directives.hdf` y volver a correr `02b-setup-directives.sh` es suficiente para publicar cambios de directivas entre exámenes; no requiere reconstruir el kernel/initrd/sfs.
+
+Nota sobre `02e-build-hnetsync-layer.sh`: si cambia `huronos-patch/livekitlib` (la parte de `hnetsync-pull`, que corre en el initrd), hace falta además `./scripts/00b-rebuild-initrd.sh` antes de `02-build-huronos-boot.sh`.
 
 ### 4. Master (DHCP + HTTP)
 
@@ -217,12 +241,24 @@ HuronOS ya trae, dentro de `huronOS/base/01-core.hsl`, el mecanismo completo de 
 
 Lo único que falta en netboot es que `huronOS/software/*.hsm` (los módulos de IDEs/compiladores que `hmm` monta) no viajan dentro de `huronos-system.sfs` — se excluyeron deliberadamente por el bug de los 4 GiB (ver abajo). `huronos-patch/hmm` agrega, dentro de `activate()`, un fetch bajo demanda: si `netboot=true` y el `.hsm` pedido no existe localmente, se descarga del master (`software.url`) antes de montarlo — solo los módulos que las directivas activas realmente piden, nunca el catálogo completo. Se apila como `huronOS/base/06-netboot-hmm.hsl`, por encima de `01-core.hsl` en la unión AUFS (gracias a que `union_append_modules()` ya recorre `huronOS/base/*.hsl` en orden alfabético), sin modificar ningún archivo original de HuronOS.
 
+### `huronos-patch/hnetsync/` (capa `07-hnetsync.hsl`) + la parte de `pull` en `livekitlib`
+
+`libhpersistence.so`/`libhrestore.so` (HuronOS original, sin modificar) ya saben restaurar/respaldar el trabajo del contestant entre encendidos — pero esperan una partición física `event`/`contest` en un USB. En netboot esas particiones son `tmpfs` (RAM), así que sin este parche todo se perdía al apagar la VM. La solución tiene tres piezas:
+
+- **Restaurar (pull)**: agregado directamente en `persistent_changes()` de `huronos-patch/livekitlib`, justo después de montar los `tmpfs` de `event`/`contest` — **en el initrd, antes de `pivot_root`**, no en un servicio systemd posterior (ver más abajo por qué).
+- **Guardar (push)**: `huronos-patch/hnetsync/usr/local/sbin/hnetsync-push`, enganchado con *drop-ins* systemd (`hsync.service.d/`, `happly.service.d/`, más un `hnetsync-push-shutdown.service` para el apagado) — nunca se edita `hsync.service`/`happly.service` en sí.
+- **`usr/lib/hsync/libhsystem.so`** (copia parchada, mismo patrón que `huronos-patch/hmm`): `system_has_just_booted()` decide si es "el primer arranque" mirando `/proc/uptime < 60s` — poco confiable en este netboot, donde kernel+initrd+descarga+descompresión ya tardan más que eso por sí solos. La copia parchada usa un marcador de una sola vez por arranque **solo si `netboot=true`**; el camino físico (USB) queda intacto.
+
+La identidad de cada máquina es la MAC de su interfaz de red — por eso `04-start-slave1.sh`/`04-start-slave2.sh` fijan `mac=` explícita (QEMU les daba la misma por defecto si no).
+
+Ver `PROGRESO.md` (intento 12) para los tres bugs reales encontrados armando esto — ninguno se ve con solo leer el código, hicieron falta ciclos completos de arranque/apagado para descubrirlos.
+
 ---
 
 ## Trabajo futuro (fuera de este proyecto por ahora)
 
-- Sincronizar `event`/`contest` (hoy en RAM) hacia el servidor master mediante un servicio periódico (POST por HTTP), para persistencia real entre sesiones de examen.
 - Optimizar el tiempo de arranque (~2:30 min hoy, copiando `huronos-system.sfs` completo a RAM sin caché).
+- Probar el modo `Event` con un horario vigente (ya se probó a fondo `Contest`, ver `PROGRESO.md`).
 
 ---
 
@@ -260,3 +296,6 @@ Agrega `debug` a `huronos.flags` (imita el label `debug` de `boot/huronos.cfg` d
 | No hay internet real dentro de la VM (solo conectividad al master) | Falta NAT del bridge `br-ipxe` hacia la interfaz con internet del host | `sudo ./scripts/01-setup-network.sh` (idempotente, agrega `MASQUERADE`+`FORWARD` automáticamente) |
 | `hsync.log` muestra `!huronOS module not found: ` con la ruta **vacía** | `readlink -f` exige que los directorios padre ya existan; `huronOS/software/<categoria>/` no existe hasta que se descarga algo ahí | Ya corregido en `huronos-patch/hmm`: crea el directorio padre y descarga contra la ruta cruda antes de resolver con `readlink -f` |
 | Un `.hsm` pedido en `AvailableSoftware` da `404` al descargarlo (`curl -I http://.../software/...` confirma) | `cp -a` desde la ISO preserva permisos root-only; `nginx` corre como `www-data` dentro del contenedor | Ya corregido en `02b-setup-directives.sh`: `chmod -R a+rX` sobre `boot/software/` tras copiar |
+| Tras reiniciar la VM, el trabajo restaurado de `event`/`contest` desaparece a los pocos segundos (`hsync.log` muestra `Running mode is always, ...considered to be different`) | `system_has_just_booted()` (HuronOS original) decidió que este NO era el primer arranque (uptime > 60s), se saltó el restore, y por seguridad reconstruyó todo desde cero en modo `always` — borrando en cascada lo recién restaurado | Ya corregido: el `pull` corre en el initrd (antes de que systemd cuente uptime) y `libhsystem.so` usa un marcador de arranque en vez de `/proc/uptime` cuando `netboot=true` (capa `07-hnetsync.hsl`) |
+| `hnetsync-pull` descarga el `.tar.gz` pero `/var/log/hnetsync-initrd.log` muestra `tar: invalid option -- z` | El `tar` de busybox de este initrd (v1.26.2) no soporta `-z` aunque `gzip`/`gunzip` existan como applets aparte | Ya corregido en `huronos-patch/livekitlib`: `gzip -dc archivo.tar.gz \| tar x -C DIR -f -` en vez de `tar xzf` |
+| No se ve nada de `hnetsync-pull` en `journalctl -b 0`/`dmesg` | journald no captura la salida de consola del initrd (arranca después, ya en el sistema completo) | Revisar `/var/log/hnetsync-initrd.log` (escrito directo en `$SYSCHANGES`, sobrevive al `pivot_root`) |

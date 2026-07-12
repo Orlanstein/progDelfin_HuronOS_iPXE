@@ -1,0 +1,68 @@
+#!/bin/bash
+# hnetsync-push: sube event.tar.gz/contest.tar.gz al master. Se dispara via
+# ExecStopPost de hsync.service (cada ciclo de hsync.timer, ~60s) y de
+# happly.service (cambios de modo programados), ademas de al apagar
+# (hnetsync-push-shutdown.service). Sobrescribe el respaldo anterior de esta
+# maquina en el master; no hay historial, solo el ultimo estado.
+set -u
+
+LOG=/var/log/hsync.log
+readonly MEMORY=/run/initramfs/memory
+readonly SYNC_SERVER_CONF="$MEMORY/system/huronOS/data/configs/sync-server.conf"
+
+log() {
+	echo "$(date --iso-8601=seconds) [hnetsync-push] $*" >>"$LOG"
+}
+
+cmdline_value() {
+	cat /proc/cmdline | sed "s/.*huronos.flags=(\(.*\)).*/\1/" | sed -ne "/.*$1=\([^;]*\).*/!d;s//\1/p"
+}
+cmdline_has() {
+	[ "$(cmdline_value "$1")" = "true" ]
+}
+
+if ! cmdline_has netboot; then
+	exit 0
+fi
+
+if [ ! -f "$SYNC_SERVER_CONF" ]; then
+	exit 0
+fi
+
+SERVER_IP="$(grep '^DIRECTIVES_SERVER_IP=' "$SYNC_SERVER_CONF" | cut -d= -f2)"
+[ -z "$SERVER_IP" ] && exit 0
+
+MACHINE_ID=""
+for ADDR_FILE in /sys/class/net/*/address; do
+	IFACE="$(basename "$(dirname "$ADDR_FILE")")"
+	[ "$IFACE" = "lo" ] && continue
+	MACHINE_ID="$(tr -d ':' <"$ADDR_FILE" | tr 'A-Z' 'a-z')"
+	[ -n "$MACHINE_ID" ] && break
+done
+[ -z "$MACHINE_ID" ] && exit 0
+
+for DISK in event contest; do
+	MOUNT_POINT="$MEMORY/$DISK"
+	if ! mountpoint -q "$MOUNT_POINT"; then
+		continue
+	fi
+	# Nada que respaldar todavia
+	if [ -z "$(ls -A "$MOUNT_POINT" 2>/dev/null)" ]; then
+		continue
+	fi
+
+	TMP_FILE="$(mktemp)"
+	if tar czf "$TMP_FILE" -C "$MOUNT_POINT" .; then
+		URL="http://$SERVER_IP/sync/$MACHINE_ID/$DISK.tar.gz"
+		if curl -fsS --max-time 30 --upload-file "$TMP_FILE" "$URL" >/dev/null; then
+			log "+Subido $DISK.tar.gz ($(du -h "$TMP_FILE" | cut -f1)) a $URL"
+		else
+			log "-Fallo al subir $DISK.tar.gz a $URL"
+		fi
+	else
+		log "-Fallo al empaquetar $MOUNT_POINT"
+	fi
+	rm -f "$TMP_FILE"
+done
+
+exit 0

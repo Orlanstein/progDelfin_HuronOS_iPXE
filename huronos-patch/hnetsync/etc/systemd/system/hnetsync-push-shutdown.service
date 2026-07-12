@@ -1,0 +1,12 @@
+[Unit]
+Description=huronOS-lab-network: sube event/contest al master antes de apagar
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hnetsync-push
+
+[Install]
+WantedBy=multi-user.target

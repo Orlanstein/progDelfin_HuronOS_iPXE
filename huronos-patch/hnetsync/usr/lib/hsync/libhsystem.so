@@ -1,0 +1,237 @@
+#!/bin/bash
+
+#	libhsystem.sh (hsync.sh library)
+#	This library contains functions to get information about the system
+#	and it's state.
+#
+#	Copyright (C) 2024, huronOS Project:
+#		<http://huronos.org>
+#
+#	Licensed under the GNU GPL Version 2
+#		<http://www.gnu.org/licenses/gpl-2.0.html>
+#
+#	Authors:
+#		Enya Quetzalli <equetzal@huronos.org>
+#		Abraham Omar   <aomm@huronos.org>
+
+# Returns true if the uptime has 120 or less seconds of boottime.
+# The hsync.timer is configured to start 60 seconds after boot,
+# once network is initialized and graphical enviroment is set.
+# So, first execution should be between ~60s and ~120s of bootime.
+system_has_just_booted() {
+	## Check if huronOS rebooted in the last 120 seconds
+	log " Checking if huronOS has just booted"
+
+	## huronOS-lab-network extension: our netboot (kernel+initrd+HTTP fetch+
+	## squashfs decompress) routinely takes well over 60s by itself, so the
+	## uptime check below is never reliable here -- hsync.service's first
+	## real execution can legitimately happen minutes into boot, every
+	## single time. Use a boot-scoped marker instead, so this still fires
+	## exactly once per boot regardless of how long boot took. The physical
+	## (non-netboot) path below is untouched.
+	if cmdline_has netboot; then
+		if [ ! -f /run/hsync/netboot-first-run-done ]; then
+			mkdir -p /run/hsync
+			touch /run/hsync/netboot-first-run-done
+			log " huronOS has just booted (netboot), hsync first execution after boot."
+			return 0 # true
+		fi
+		log " huronOS already booted before, recurring hsync execution."
+		return 1 # false
+	fi
+
+	seconds_since_boot=$(awk '{print int($1)}' /proc/uptime)
+
+	# If hardware clock is not sync with ntp server, this will still working as the uptime
+	# only counts seconds since boot using hardware clock.
+	if [ $seconds_since_boot -lt 60 ]; then
+		log " huronOS has just booted, hsync first execution after boot."
+		return 0 # true
+	fi
+
+	# In case demo was enabled on cmdline, first execution of hsync may be out of boot time.
+	# If that happen, let's replace demo work with booted to run this at anytime only on first manual launch
+	if cmdline_has "demo" && [ -f /run/hsync/demo ] && [ "$(cat /run/hsync/demo)" = "demo" ]; then
+		echo "booted" >/run/hsync/demo
+		return 0
+	fi
+
+	log " huronOS already booted before, recurring hsync execution."
+	return 1 # false
+}
+
+## Get the huronos.flags cmdline value for a given key
+# $1 = key to search value of
+# Eg. $1="ip", "ip=1.1.1.1" -> "1.1.1.1"
+cmdline_value() {
+	cat /proc/cmdline | sed "s/.*huronos.flags=(\(.*\)).*/\1/" | sed -ne "/.*$1=\([^;]*\).*/!d;s//\1/p"
+}
+
+## Returns true if there is a huronos.flag with value equals true
+# $1 = key to expect value as true
+cmdline_has() {
+	VALUE="$(cmdline_value $1)"
+	if [ "$VALUE" = "true" ]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+apply_demo_if_on() {
+
+	# If demo flag is set on cmdline, hsync services
+	# should stop to let orgs set screen settings, etc.
+	# then hsync services must have to be manually activated
+	if cmdline_has "demo"; then
+		local HSYNC_RUN_DIR="/run/hsync"
+		mkdir -p $HSYNC_RUN_DIR
+		# If file does not exist, services has not been stoped yet.
+		if [ ! -f $HSYNC_RUN_DIR/demo ]; then
+			# Create demo file to mark the services are being stoped
+			echo "demo" >$HSYNC_RUN_DIR/demo
+			# Stop current execution and future ones
+			systemctl stop hsync.timer
+			systemctl stop hsync.service
+			exit
+		## If demo file is here, services were manually started
+		else
+			return 0
+		fi
+	fi
+}
+
+## Returns true if the cmdline at boot has persistence set to true
+system_has_persistece_enabled() {
+	return $(cmdline_has "persistence")
+}
+
+state_clock_sync() {
+	if [ "$STATE_IS_CLOCK_SYNC" = "no" ]; then
+		ntpdate -t 2 pool.ntp.org
+		STATE_IS_CLOCK_SYNC="$(timedatectl show | grep NTPSynchronized | cut -d= -f2)"
+		if [ "$STATE_IS_CLOCK_SYNC" = "yes" ]; then
+			HAS_CLOCK_CHANGED_SINCE_LAST_SYNC="yes"
+			log "System clock has changed"
+			return 0 #success
+		fi
+	fi
+	STATE_IS_CLOCK_SYNC="$(timedatectl show | grep NTPSynchronized | cut -d= -f2)"
+}
+
+state_hsync_execution_time() {
+	STATE_LAST_HSYNC_EXECUTION_TIME_UTC="$(date --utc --iso-8601='seconds')"
+}
+
+load_state() {
+	if [ ! -f $STATE_FILE ]; then
+		log "-Cannot load current state"
+		STATE_MODE="none"
+		return 1 # error
+	fi
+
+	STATE_IS_CLOCK_SYNC="$(cat /etc/hsync/state | grep is-clock-sync= | cut -d= -f2)"
+	STATE_MODE="$(cat /etc/hsync/state | grep mode= | cut -d= -f2)"
+	STATE_MODE_START_TIME_UTC="$(cat /etc/hsync/state | grep mode-start-time-utc= | cut -d= -f2)"
+	STATE_MODE_END_TIME_UTC="$(cat /etc/hsync/state | grep mode-end-time-utc= | cut -d= -f2)"
+	STATE_IS_PERSISTENCE_ENABLED="$(cat /etc/hsync/state | grep is-persistence-enabled= | cut -d= -f2)"
+	STATE_PERSISTENCE_DISK="$(cat /etc/hsync/state | grep persistence-disk= | cut -d= -f2)"
+	STATE_LAST_HSYNC_EXECUTION_TIME_UTC="$(cat /etc/hsync/state | grep last-hsync-execution-time-utc= | cut -d= -f2)"
+
+	log "+System state is set to:
+	is-clock-sync=$STATE_IS_CLOCK_SYNC
+	mode=$STATE_MODE
+	mode-start-time-utc=$STATE_MODE_START_TIME_UTC
+	mode-end-time-utc=$STATE_MODE_END_TIME_UTC
+	is-persistence-enabled=$STATE_IS_PERSISTENCE_ENABLED
+	persistence-disk=$STATE_PERSISTENCE_DISK
+	last-hsync-execution-time-utc=$STATE_LAST_HSYNC_EXECUTION_TIME_UTC"
+	return 0 # success
+}
+
+update_state() {
+	STATE_MODE="$NEW_MODE"
+	STATE_MODE_START_TIME_UTC="$NEW_MODE_START_TIME_UTC"
+	STATE_MODE_END_TIME_UTC="$NEW_MODE_END_TIME_UTC"
+	return 0
+}
+
+save_state() {
+	cat <<EOT >$STATE_FILE
+is-clock-sync=$STATE_IS_CLOCK_SYNC
+mode=$STATE_MODE
+mode-start-time-utc=$STATE_MODE_START_TIME_UTC
+mode-end-time-utc=$STATE_MODE_END_TIME_UTC
+is-persistence-enabled=$STATE_IS_PERSISTENCE_ENABLED
+persistence-disk=$STATE_PERSISTENCE_DISK
+last-hsync-execution-time-utc=$STATE_LAST_HSYNC_EXECUTION_TIME_UTC
+EOT
+	log "+System state updated to:
+	is-clock-sync=$STATE_IS_CLOCK_SYNC
+	mode=$STATE_MODE
+	mode-start-time-utc=$STATE_MODE_START_TIME_UTC
+	mode-end-time-utc=$STATE_MODE_END_TIME_UTC
+	is-persistence-enabled=$STATE_IS_PERSISTENCE_ENABLED
+	persistence-disk=$STATE_PERSISTENCE_DISK
+	last-hsync-execution-time-utc=$STATE_LAST_HSYNC_EXECUTION_TIME_UTC"
+}
+
+# Determines if the running mode, is the same as the
+# calculated on the directives file.
+is_running_mode_same_as_new_mode() {
+	log " Running mode is $STATE_MODE, directives ask to set mode $NEW_MODE"
+
+	## If the state mode and the new mode are different, we know is not the same
+	if [ "$STATE_MODE" != "$NEW_MODE" ]; then
+		return 1 # false, not-the-same
+	fi
+
+	# If both are the same, and they're -Always- mode, there's no timeframes,
+	# so they're the same mode.
+	if [ "$STATE_MODE" = "always" ]; then
+		return 0 # true, the-same
+	fi
+
+	# Ok, so if the same mode is running we need to verify both of them are
+	# on the same time frame. This is not trivial because eg. maybe while an event is
+	# running, the organizers updated the end time. We need to handle this by not
+	# moving the persistence, just the next forced execution.
+	# By the other hand, maybe the last time the system was powered off, was during
+	# a running event. So, at the boot time we will restore the persistence of that
+	# event, BUT now we're at a different date with a new directives file and a
+	# new event running right now. In this case, the event is not the same and we
+	# need to clean the past event data.
+	declare STATE_MODE_START=$(date --date="$STATE_MODE_START_TIME_UTC" +'%s')
+	declare STATE_MODE_END=$(date --date="$STATE_MODE_END_TIME_UTC" +'%s')
+	declare NEW_MODE_START=$(date --date="$NEW_MODE_START_TIME_UTC" +'%s')
+	declare NEW_MODE_END=$(date --date="$NEW_MODE_END_TIME_UTC" +'%s')
+	declare CURRENT_TIME=$(date +'%s')
+
+	# at is only executed on sec 00, and this line is usually reached between 3-15 seconds
+	# after the original scheduled execution time, so we can add a 30 seconds tolerance
+	# to consider the contest extension just in the past scheduled point
+	STATE_MODE_END=$((STATE_MODE_END + 30))
+
+	# Asumtions will be the following:
+	#	-If the current mode end time was before (lower equal) than CURRENT_TIME, then they
+	# 	 will be considered different event.
+	#	-If the current mode start time was after (greter) than CURRENT_TIME, they will be
+	#	 considered different event. Also, this is supposed to not be possible as the
+	# 	 state file is only generated if the mode is already running, so start time must had
+	#	 to be before CURRENT_TIME. This can mean the system clock is not sync with NTP server.
+	#	-If the current mode was started before the new end time and it ends after CURRENT_TIME
+	#	 it will be cosidered the same event.
+	#	-Any other possbile combination will be considered to be different.
+	if [ $STATE_MODE_END -le $CURRENT_TIME ]; then
+		return 1 # false, different
+	fi
+	if [ $STATE_MODE_START -gt $CURRENT_TIME ]; then
+		return 1 # false, different
+	fi
+	if [ $STATE_MODE_START -lt $NEW_MODE_END ] &&
+		[ $STATE_MODE_END -gt $CURRENT_TIME ]; then
+		return 0 # true, same
+	fi
+
+	return 1 # false, different
+}

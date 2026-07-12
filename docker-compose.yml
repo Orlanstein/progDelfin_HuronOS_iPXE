@@ -6,6 +6,7 @@ services:
     network_mode: host
     volumes:
       - ./boot:/var/www/boot:ro
+      - ./sync-data:/var/sync-data
     restart: unless-stopped
     cap_add:
       - NET_ADMIN

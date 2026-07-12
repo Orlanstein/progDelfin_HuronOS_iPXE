@@ -26,7 +26,7 @@ qemu-system-x86_64 \
     -m 6144 \
     -smp 2 \
     -netdev tap,id=net0,ifname=tap1,script=no,downscript=no \
-    -device e1000,netdev=net0,romfile="${IPXE_ROM}" \
+    -device e1000,netdev=net0,mac=52:54:00:12:34:02,romfile="${IPXE_ROM}" \
     -boot order=n \
     -display sdl,gl=off,window-close=on \
     -vga std \

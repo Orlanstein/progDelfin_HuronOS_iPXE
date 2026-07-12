@@ -24,3 +24,6 @@ kernel-cache/
 master/
 # Sistema Live generado
 boot/*.sfs
+
+# Datos de persistencia event/contest subidos por las VMs (hnetsync)
+sync-data/

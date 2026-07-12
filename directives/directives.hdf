@@ -32,14 +32,19 @@ AvailableSoftware=internet/chromium|langs/g++|langs/gcc|langs/python3|tools/kons
 Bookmarks={OmegaUp^https://omegaup.com}|{Codeforces^https://codeforces.com}|
 Wallpaper=default
 
+# OJO: get_directives_times (libhapply.so) concatena TODAS las lineas de la
+# seccion (comentarios incluidos) y las divide con "xargs -n 2" ignorando los
+# saltos de linea -- cualquier comentario CON NUMERO IMPAR de palabras dentro
+# de [Event-Times]/[Contest-Times] desalinea el START/END de cada par de fechas.
+# Por eso los comentarios de estas dos secciones van AQUI AFUERA, nunca adentro.
+# Ajusta las fechas y horas a las de tus clases reales (Formato ISO 8601).
 [Event-Times]
-# Ajusta las fechas y horas a las de tus clases reales (Formato ISO 8601)
 2026-06-29T09:00:00 2026-06-29T18:00:00
 2026-06-30T09:00:00 2026-06-30T18:00:00
 
-[Contest-Times]
-# Prueba real: hoy 2026-07-11 17:00 -> mañana 2026-07-12 17:00 (America/Mexico_City,
-# TimeZone del [Global] de este archivo). Contest tiene prioridad sobre Event si se
-# solapan (ver select_mode_to_apply en libhapply.so), así que durante esta ventana
+# Prueba real: hoy 2026-07-11 17:00 -> manana 2026-07-12 17:00 (America/Mexico_City,
+# la TimeZone del [Global] de este archivo). Contest tiene prioridad sobre Event si
+# se solapan (select_mode_to_apply en libhapply.so), asi que durante esta ventana
 # el sistema debe quedar en modo Contest sin importar [Event-Times].
+[Contest-Times]
 2026-07-11T17:00:00 2026-07-12T17:00:00
