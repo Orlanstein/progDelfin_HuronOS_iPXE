@@ -133,6 +133,27 @@ docker compose up -d
 
 Nota: `boot/boot.ipxe` normalmente está versionado con `set server 192.168.100.1` (valor de la simulación QEMU). El paso 2 lo sobreescribe para hardware real — si vuelves a correr la simulación QEMU después, recuerda restaurarlo con `git checkout boot/boot.ipxe`.
 
+### 6.1 Chainload TFTP para firmware PXE no-iPXE (necesario en hardware real)
+
+A diferencia de la simulación QEMU (cuya ROM de red ya es un binario iPXE desde el
+primer DHCP request), el firmware UEFI de fábrica de una PC física **no es iPXE**
+todavía en su primer request, así que no puede consumir directamente el script HTTP
+`boot.ipxe`. `dnsmasq.conf` (de esta carpeta) ya está configurado para encadenar esto
+en dos pasos vía TFTP:
+
+1. El firmware UEFI (detectado por DHCP option 60 = `PXEClient:Arch:00007`, EFI x86-64)
+   pide por TFTP `snponly.efi` — un binario iPXE real, compilado con el driver SNP del
+   propio firmware UEFI (máxima compatibilidad con NICs que no conocemos de antemano).
+2. Al arrancar, `snponly.efi` repite el DHCP request pero ya como iPXE (con la opción
+   175), y ahí `dnsmasq` lo redirige al `boot.ipxe` real por HTTP.
+
+Esto ya viene resuelto en el repo: solo hace falta que `experimento_hardware_real/tftpboot/snponly.efi`
+exista (descargado de `http://boot.ipxe.org/x86_64-efi/snponly.efi`) y que el
+`docker-compose.yml` de esta carpeta monte `./tftpboot:/var/ftpd:ro` (ya está en el
+archivo versionado). Si se agrega una PC con arquitectura distinta (BIOS legacy en vez
+de UEFI, o UEFI de 32 bits), hay que agregar el binario `.efi`/`.kpxe` correspondiente
+a `tftpboot/` y su propio `dhcp-match`/`dhcp-boot` en `dnsmasq.conf`.
+
 ## 7. Qué NO se usa aquí
 
 | Script (raíz del repo) | Por qué no aplica | Qué lo reemplaza |

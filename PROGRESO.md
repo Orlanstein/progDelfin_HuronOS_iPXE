@@ -6,11 +6,13 @@ Registro cronológico del trabajo de reemplazar Ubuntu/casper por HuronOS arranc
 
 Que las PCs del laboratorio arranquen HuronOS completo (incluyendo el escritorio Budgie) directamente por red, sin instalar una memoria USB por equipo, usando la infraestructura iPXE ya existente en este proyecto (dnsmasq + nginx + QEMU).
 
-## Estado actual (2026-07-11)
+## Estado actual (2026-07-13)
 
-**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, con red funcionando automáticamente dentro del escritorio (DHCP vía `connman`, salida a internet real vía NAT en el host), **`directives.hdf` detectándose y aplicándose automáticamente** (allowlist de sitios, USB, wallpaper, horarios Event/Contest, software bajo demanda), **y ahora también el trabajo de `event`/`contest` persistiendo entre sesiones vía sync con el master** (`hnetsync`). Ver intentos 9-12. Probado con un horario de `Contest` real (no fechas de ejemplo ya pasadas): cambio de modo, bloqueo de USB, allowlist estricto, y sobrevivencia de archivos del usuario tras apagar/prender la VM, todo verificado en vivo.
+**Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, con red funcionando automáticamente dentro del escritorio (DHCP vía `connman`, salida a internet real vía NAT en el host), **`directives.hdf` detectándose y aplicándose automáticamente** (allowlist de sitios, USB, wallpaper, horarios Event/Contest, software bajo demanda), **y también el trabajo de `event`/`contest` persistiendo entre sesiones vía sync con el master** (`hnetsync`). Ver intentos 9-12. Probado con un horario de `Contest` real (no fechas de ejemplo ya pasadas): cambio de modo, bloqueo de USB, allowlist estricto, y sobrevivencia de archivos del usuario tras apagar/prender la VM, todo verificado en vivo.
 
-**Pendiente:** optimizar el tiempo de arranque (~2:30 min hoy) y correr una prueba similar en modo `Event`. Ver "Próximos pasos".
+**Y ahora, además: primer piloto en hardware real** (Raspberry Pi + MikroTik hEX lite + laptop física) arrancando por PXE de punta a punta, con `directives.hdf` en modo `Event` aplicándose y el software (`vscode`/`pycharm`/`chromium`, etc.) cargando correctamente. Ver intento 13.
+
+**Pendiente:** optimizar el tiempo de arranque (~2:30 min hoy), probar `Event` con horario vigente en la simulación QEMU (ya validado en hardware real), y verificar `hnetsync` (persistencia) en la laptop física. Ver "Próximos pasos".
 
 ## Bitácora de intentos
 
@@ -127,11 +129,33 @@ Se agregó además un log propio (`/var/log/hnetsync-initrd.log`, escrito direct
 
 **Verificado en vivo, extremo a extremo:** con `directives.hdf` apuntando a una ventana de `Contest` real (no fechas de ejemplo ya pasadas), la VM cambió correctamente a modo `contest` (allowlist estricto, USB bloqueado, software de la lista de Contest activado), un archivo creado por el usuario sobrevivió un apagado+encendido completo de la VM, y `restore_state_from_disk` reportó "preserving changes" (sin transición destructiva) en el segundo arranque.
 
+### 13. Piloto en hardware real: Raspberry Pi + MikroTik hEX lite + laptop física (2026-07-13)
+
+Primer despliegue fuera de la simulación QEMU: RPi como master (dnsmasq+nginx+sync-server, igual que en `master/`), un MikroTik hEX lite como router/switch dedicado del segmento de examen (aislado del modem/ISP, igual rol que cumplía `br-ipxe` en la simulación), y la laptop del usuario como primera PC cliente física. Todo lo específico de hardware real vive en `experimento_hardware_real/` (ver `LABORATORIO-REAL.md`), sin tocar `master/`, `docker-compose.yml` ni `boot/boot.ipxe` de la raíz.
+
+**Red de la RPi (Ubuntu, NetworkManager+netplan+cloud-init):**
+- La RPi administra dos interfaces: `wlan0` (WiFi de casa, para SSH/administración) y `eth0` (segmento aislado del MikroTik, IP estática `192.168.2.2/24`). El `nmcli connection modify`/`up` sobre `eth0` no pisó la sesión SSH por `wlan0`.
+- Bug encontrado: `/etc/netplan/50-cloud-init.yaml` (generado por cloud-init en cada boot) competía con el perfil de NetworkManager, dejando una IP secundaria fantasma (`192.168.2.10`) además de la correcta. Corrección: `network: {config: disabled}` en `/etc/cloud/cloud.cfg.d/`, para que cloud-init deje de regenerar netplan.
+- Bug encontrado: el archivo netplan generado por NetworkManager (`90-NM-*.yaml`) terminó con `gateway4:` (sintaxis vieja) **y** `routes:` (sintaxis nueva) para la misma interfaz al mismo tiempo — `netplan apply` colgado con "Conflicting default route declarations". Corrección: eliminar la línea `gateway4:` a mano, dejando solo `routes:`.
+
+**MikroTik:** llegó preconfigurado de una prueba anterior (bridge `bridge-lan` en `ether2-5`, IP `192.168.2.1/24`, NAT masquerade `ether1`→internet, DHCP client en `ether1`) — se reusó tal cual, solo hacía falta confirmar que su DHCP server propio (`dhcp-lan`) estuviera apagado para no competir con el `dnsmasq` de la RPi (ya lo estaba).
+
+**Bug encontrado — `ufw` bloqueando DHCP/HTTP silenciosamente:** la RPi traía `ufw` activo (`deny` por defecto) de una configuración anterior, con reglas para SSH/NBD/NFS pero **sin** `67/udp` (DHCP) ni `80/tcp` (HTTP). `tcpdump` mostraba los paquetes DHCP de la laptop llegando bien a `eth0`, pero `dnsmasq` nunca los veía en su propio log — la firma clásica de un firewall descartando tráfico por debajo de la capa de aplicación. Corrección: `ufw allow in on eth0 to any port 67 proto udp` + `... port 80 proto tcp`, **acotado a `eth0`** (no expuesto en `wlan0`, la red de casa).
+
+**Bug encontrado — firmware PXE de fábrica no es iPXE (a diferencia de QEMU):** con el firewall corregido, el DHCP normal del sistema operativo de la laptop funcionaba, pero el PXE de la laptop (`PXEClient:Arch:00007:UNDI:003016`, UEFI x86-64 real) se quedaba en "Start PXE over IPv4" sin avanzar. Causa: a diferencia de la ROM `pxe-e1000.rom` de QEMU (que ya es un binario iPXE desde el primer DHCP request), el firmware UEFI de fábrica de una PC física no es iPXE en su primer request, así que no puede consumir directamente el script HTTP `boot.ipxe` — dnsmasq solo tenía configurada la regla `dhcp-boot` para clientes que ya mandan la opción 175 (exclusiva de iPXE).
+
+Corrección: chainload en dos pasos vía TFTP. Se descargó `snponly.efi` (binario iPXE oficial, `http://boot.ipxe.org/x86_64-efi/snponly.efi`, usa el driver SNP del propio firmware UEFI para máxima compatibilidad con NICs desconocidas) a `experimento_hardware_real/tftpboot/`, se habilitó `enable-tftp`/`tftp-root=/var/ftpd` en `dnsmasq.conf`, y se agregó una regla `dhcp-match=set:efi64,60,PXEClient:Arch:00007` + `dhcp-boot=tag:efi64,tag:!ipxe,snponly.efi` — así el firmware de fábrica primero recibe `snponly.efi` por TFTP, ese binario repite el DHCP request ya como iPXE (con la opción 175), y ahí sí cae en la regla existente hacia `boot.ipxe` por HTTP. Documentado en `LABORATORIO-REAL.md` §6.1.
+
+**Resultado:** arranque PXE completo de la laptop hasta el escritorio Budgie, `directives.hdf` (`[Event]`, ventana 2026-07-13T10:00 a 2026-07-16T23:59:59) aplicándose y el software de la directiva activa (`vscode`, `pycharm`, `chromium`, etc.) abriendo correctamente — confirmado en vivo por el usuario. Sin poder verificar todavía el allowlist de sitios (el lab de prueba no tenía salida a internet en ese momento) ni `hnetsync` (persistencia) con la MAC real de la laptop — ver "Próximos pasos".
+
 ## Próximos pasos
 
 1. Evaluar y optimizar el tiempo de arranque (~2:30 min hoy).
-2. Repetir la prueba de horario vigente en modo `Event` (ya se probó a fondo `Contest`, ver intento 12).
+2. Repetir la prueba de horario vigente en modo `Event` **en la simulación QEMU** (ya se probó a fondo `Contest` en QEMU, ver intento 12; `Event` ya se validó en hardware real, ver intento 13).
 3. Fijar MACs distintas para más de 2 VMs si se agregan más `slaveN` al laboratorio simulado (hoy solo `slave1`/`slave2` tienen `mac=` fija).
+4. Verificar `hnetsync` (persistencia `event`/`contest`) en la laptop física del piloto de hardware real — confirmar que `sync-data/<mac-de-la-laptop>/event.tar.gz` aparece en la RPi tras un ciclo de `hsync`.
+5. Verificar el allowlist de sitios (`AllowedWebsites`) del piloto de hardware real en un lab con salida a internet.
+6. Escalar el piloto de hardware real a más PCs físicas (`ether3`/`ether4`/`ether5` del MikroTik).
 
 ## Referencias
 

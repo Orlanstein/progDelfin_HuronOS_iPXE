@@ -225,6 +225,12 @@ Detiene el contenedor Docker, desmonta la ISO si quedó montada, y elimina `tap0
 
 ---
 
+## Piloto en hardware real
+
+Todo lo de arriba es la simulación 100% local (QEMU + bridge virtual `br-ipxe` en el mismo host que corre el master). Existe además un primer piloto en **hardware real** — Raspberry Pi como master, un MikroTik hEX lite como router/switch dedicado del segmento de examen, y PCs físicas (empezando por una laptop) como clientes PXE — auto-contenido en `experimento_hardware_real/` sin modificar nada de lo anterior (`master/`, `docker-compose.yml`, `boot/boot.ipxe` de la raíz siguen sirviendo igual para la simulación QEMU).
+
+Ya validado de punta a punta: arranque PXE completo de una laptop física hasta el escritorio Budgie, `directives.hdf` aplicándose (allowlist, software bajo demanda — `vscode`/`pycharm`/`chromium`, etc. confirmados abriendo), sobre una red físicamente aislada por el MikroTik. Ver `experimento_hardware_real/LABORATORIO-REAL.md` para la topología, la configuración paso a paso del MikroTik/RPi, y el detalle del chainload TFTP (`snponly.efi`) que hace falta para firmware PXE de fábrica (no-iPXE) — algo que la simulación QEMU no necesita porque su ROM de red ya es iPXE desde el primer DHCP request. Ver también `PROGRESO.md` (intento 13) para la bitácora completa de bugs encontrados y corregidos armando esto.
+
 ## Los parches locales sobre HuronOS
 
 Ambos son extensiones aditivas, no parte del upstream oficial, y el camino original (USB física + `install.sh`) no se toca en ninguno de los dos: cada rama nueva solo se activa cuando el kernel recibe `huronos.flags=(netboot=true;...)`.
@@ -258,7 +264,8 @@ Ver `PROGRESO.md` (intento 12) para los tres bugs reales encontrados armando est
 ## Trabajo futuro (fuera de este proyecto por ahora)
 
 - Optimizar el tiempo de arranque (~2:30 min hoy, copiando `huronos-system.sfs` completo a RAM sin caché).
-- Probar el modo `Event` con un horario vigente (ya se probó a fondo `Contest`, ver `PROGRESO.md`).
+- Probar el modo `Event` con un horario vigente **en la simulación QEMU** (ya se probó a fondo `Contest` aquí, ver `PROGRESO.md`; `Event` ya se validó en el piloto de hardware real — ver arriba e intento 13 de `PROGRESO.md`).
+- Verificar `hnetsync` (persistencia `event`/`contest`) en el piloto de hardware real con la MAC de una PC física — confirmado el mecanismo en QEMU (intento 12), pendiente el ciclo completo apagar/encender en la laptop.
 
 ---
 
