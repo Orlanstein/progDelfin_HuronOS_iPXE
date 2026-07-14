@@ -87,6 +87,11 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 | RAM host | 14 GB+ | 6 GB por slave (incluye caché de httpfs2) + SO host + Docker |
 | Espacio en disco | ~10 GB temporales | Solo durante `00-build-kernel.sh` (fuentes del kernel); el resultado final pesa unos 15 MB |
 
+`./install.sh` instala estos paquetes por apt (Debian/Ubuntu/Raspberry Pi OS),
+autodetectando por arquitectura si aplica el set de la simulación QEMU, el del
+master de hardware real (ver `experimento_hardware_real/LABORATORIO-REAL.md`),
+o ambos. Ver `./install.sh --help` para forzar uno u otro grupo.
+
 ---
 
 ## Estructura del proyecto
