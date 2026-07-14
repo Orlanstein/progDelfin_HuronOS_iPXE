@@ -6,13 +6,15 @@ Registro cronológico del trabajo de reemplazar Ubuntu/casper por HuronOS arranc
 
 Que las PCs del laboratorio arranquen HuronOS completo (incluyendo el escritorio Budgie) directamente por red, sin instalar una memoria USB por equipo, usando la infraestructura iPXE ya existente en este proyecto (dnsmasq + nginx + QEMU).
 
-## Estado actual (2026-07-13)
+## Estado actual (2026-07-14)
 
 **Logrado:** arranque de HuronOS 100% por red hasta el escritorio gráfico completo, en la VM esclava simulada con QEMU, con red funcionando automáticamente dentro del escritorio (DHCP vía `connman`, salida a internet real vía NAT en el host), **`directives.hdf` detectándose y aplicándose automáticamente** (allowlist de sitios, USB, wallpaper, horarios Event/Contest, software bajo demanda), **y también el trabajo de `event`/`contest` persistiendo entre sesiones vía sync con el master** (`hnetsync`). Ver intentos 9-12. Probado con un horario de `Contest` real (no fechas de ejemplo ya pasadas): cambio de modo, bloqueo de USB, allowlist estricto, y sobrevivencia de archivos del usuario tras apagar/prender la VM, todo verificado en vivo.
 
-**Y ahora, además: primer piloto en hardware real** (Raspberry Pi + MikroTik hEX lite + laptop física) arrancando por PXE de punta a punta, con `directives.hdf` en modo `Event` aplicándose y el software (`vscode`/`pycharm`/`chromium`, etc.) cargando correctamente. Ver intento 13.
+**Primer piloto en hardware real** (Raspberry Pi + MikroTik hEX lite + laptop física) arrancando por PXE de punta a punta, con `directives.hdf` en modo `Event` aplicándose y el software (`vscode`/`pycharm`/`chromium`, etc.) cargando correctamente. Ver intento 13.
 
-**Pendiente:** optimizar el tiempo de arranque (~2:30 min hoy), probar `Event` con horario vigente en la simulación QEMU (ya validado en hardware real), y verificar `hnetsync` (persistencia) en la laptop física. Ver "Próximos pasos".
+**Y ahora, además: el master de hardware real quedó reproducible y operable con un solo comando** — un bug de arranque (condición de carrera reiniciaba todo el contenedor) corregido y confirmado tras un reinicio real de la RPi, más tres herramientas nuevas (`install.sh`, `setup-master.sh`, `master-tui.sh`) que reemplazan la secuencia manual de comandos por scripts idempotentes y un dashboard. Ver intento 14.
+
+**Pendiente:** optimizar el tiempo de arranque (~2:30 min hoy), probar `Event` con horario vigente en la simulación QEMU (ya validado en hardware real), y verificar `hnetsync` (persistencia) y el allowlist de sitios en la laptop física del piloto. Ver "Próximos pasos".
 
 ## Bitácora de intentos
 
@@ -147,6 +149,19 @@ Primer despliegue fuera de la simulación QEMU: RPi como master (dnsmasq+nginx+s
 Corrección: chainload en dos pasos vía TFTP. Se descargó `snponly.efi` (binario iPXE oficial, `http://boot.ipxe.org/x86_64-efi/snponly.efi`, usa el driver SNP del propio firmware UEFI para máxima compatibilidad con NICs desconocidas) a `experimento_hardware_real/tftpboot/`, se habilitó `enable-tftp`/`tftp-root=/var/ftpd` en `dnsmasq.conf`, y se agregó una regla `dhcp-match=set:efi64,60,PXEClient:Arch:00007` + `dhcp-boot=tag:efi64,tag:!ipxe,snponly.efi` — así el firmware de fábrica primero recibe `snponly.efi` por TFTP, ese binario repite el DHCP request ya como iPXE (con la opción 175), y ahí sí cae en la regla existente hacia `boot.ipxe` por HTTP. Documentado en `LABORATORIO-REAL.md` §6.1.
 
 **Resultado:** arranque PXE completo de la laptop hasta el escritorio Budgie, `directives.hdf` (`[Event]`, ventana 2026-07-13T10:00 a 2026-07-16T23:59:59) aplicándose y el software de la directiva activa (`vscode`, `pycharm`, `chromium`, etc.) abriendo correctamente — confirmado en vivo por el usuario. Sin poder verificar todavía el allowlist de sitios (el lab de prueba no tenía salida a internet en ese momento) ni `hnetsync` (persistencia) con la MAC real de la laptop — ver "Próximos pasos".
+
+### 14. Hardening del `entrypoint.sh` + herramientas de operación del master (2026-07-14)
+
+**Bug encontrado — condición de carrera reiniciaba el contenedor completo:** al reiniciar/reconstruir el contenedor del master en la RPi, `docker logs` mostraba ciclos repetidos de `dnsmasq: unknown interface eth0` seguidos de un reinicio completo de `nginx`+`dnsmasq`+`sync-server` — un *crash loop*, aunque `ip addr show eth0` y `sudo ufw status` (dentro y fuera del contenedor) mostraban todo correcto. Causa: `master/entrypoint.sh` (compartido por la simulación QEMU y por `experimento_hardware_real/`) lanza los tres procesos en background y hace `wait -n` sobre los tres — si **cualquiera** de ellos muere (p. ej. `dnsmasq` arrancando en el instante justo antes de que NetworkManager termine de traer `eth0` tras un reinicio, en hardware real con `network_mode: host` sobre la interfaz física en vez del bridge `br-ipxe` de la simulación), el script sale con `exit 1` y `restart: unless-stopped` reinicia **todo** el contenedor, incluidos procesos que estaban perfectamente sanos (`nginx`).
+
+Diagnóstico confirmado con un shell de depuración (`docker compose run --rm --entrypoint bash master`): `dnsmasq --test` solo valida sintaxis del config, **no** que la interfaz exista/responda en el momento — pasó limpio incluso cuando el contenedor real fallaba. Corriendo `dnsmasq --no-daemon --log-queries` a mano dentro de ese shell funcionó perfecto, incluyendo un intercambio DHCPDISCOVER/DHCPOFFER real con la laptop — confirmando que no era un problema de configuración sino de timing en el arranque.
+
+**Corrección:** `master/entrypoint.sh` ahora espera (hasta 30s, sondeando cada segundo) a que la interfaz declarada en `/etc/dnsmasq.conf` (parseada genéricamente con `grep -oP '^interface=\K.*'`, válido tanto para `br-ipxe` en la simulación como para `eth0` en hardware real) tenga una IP asignada antes de lanzar `nginx`/`dnsmasq`/`sync-server`. Verificado en vivo: la RPi se reinició por completo y el contenedor quedó arriba sin entrar en el crash loop.
+
+**Herramientas nuevas** (para no depender de recordar la secuencia manual de comandos):
+- `install.sh` (raíz): instala por `apt` las dependencias del proyecto, autodetectando por arquitectura si aplica el set de la simulación QEMU (`qemu-system-x86`, `ipxe-qemu`, x86_64) o el del master de hardware real (`whiptail`, `network-manager`, aarch64/armv7l), además de las comunes a ambos (`docker.io`, `docker-compose-v2`, `squashfs-tools`, `kmod`, `curl`, `git`, `iproute2`, `iptables`). Habilita el servicio Docker y agrega al usuario al grupo `docker`.
+- `experimento_hardware_real/setup-master.sh`: automatiza el setup/reinicio completo del master (verifica herramientas, genera `boot/` desde la ISO, regenera capas `hmm`/`hnetsync`, descarga `snponly.efi` si falta, copia el `boot.ipxe` de hardware real, configura red opcionalmente, levanta el contenedor) — un solo comando tanto para una máquina nueva como para un reinicio rápido (`--skip-boot-build`).
+- `experimento_hardware_real/master-tui.sh`: dashboard en terminal (whiptail) para el día a día — estado del contenedor, logs en vivo, elegir/editar `directives.hdf`, alternar `EventConfig`/`ContestConfig`, iniciar/detener/reiniciar el contenedor, configurar red, y un panel de enlaces de referencia (docs de HuronOS, repo oficial de build, ejemplos de `directives.hdf`).
 
 ## Próximos pasos
 
