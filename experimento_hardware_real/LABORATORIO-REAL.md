@@ -138,6 +138,22 @@ antes de correr `--configure-network` (ver sección 5). La IP del master
 sin importar qué máquina haga de master. Corre `./setup-master.sh --help`
 para ver todas las flags.
 
+### Dashboard (`master-tui.sh`)
+
+Para el día a día (revisar estado, ver logs, cambiar de directivas, alternar
+Event/Contest, reiniciar el contenedor) sin tener que recordar comandos
+sueltos, `experimento_hardware_real/master-tui.sh` pone un menú (whiptail)
+encima de `setup-master.sh` y de `scripts/02b-setup-directives.sh`:
+
+```bash
+cd experimento_hardware_real
+./master-tui.sh
+```
+
+Incluye también un panel de enlaces de referencia (docs de HuronOS, repo
+oficial de build, ejemplos de `directives.hdf`). No reemplaza a
+`setup-master.sh` ni a los pasos manuales — solo los envuelve.
+
 Si prefieres los pasos manuales (o quieres entender qué hace el script por
 debajo):
 
