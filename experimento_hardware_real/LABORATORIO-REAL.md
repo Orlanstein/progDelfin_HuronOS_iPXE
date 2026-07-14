@@ -113,25 +113,51 @@ Ya confirmado con `ip addr`: la interfaz Ethernet de esta RPi se llama `eth0` (c
 
 ## 6. Levantar el master
 
-Desde la **raíz del repo** (no solo esta carpeta — el `boot/` generado se comparte):
+`experimento_hardware_real/setup-master.sh` automatiza todo este paso (y la
+sección 4, si se lo pides con `--configure-network`): verifica herramientas,
+genera `boot/` desde la ISO, regenera las capas `hmm`/`hnetsync`, descarga
+`snponly.efi` si falta, copia el `boot.ipxe` de hardware real, y levanta el
+contenedor. Sirve tanto para el setup inicial de una máquina nueva como para
+un simple reinicio (con `--skip-boot-build`, no vuelve a montar la ISO de 5GB
+ni a bajar todo el catálogo de software).
 
 ```bash
-# 1. Generar boot/ igual que en la simulación (sin cambios a estos scripts)
+cd experimento_hardware_real
+
+# Primera vez en una máquina nueva (asumiendo kernel-cache/ ya compilado,
+# ver scripts/00-build-kernel.sh, o agrega --build-kernel para compilarlo):
+./setup-master.sh --configure-network --iface eth0
+
+# Reinicios posteriores (ya generado boot/, red ya configurada):
+./setup-master.sh --skip-boot-build
+```
+
+`--iface` es la única variable real entre máquinas — confírmala con `ip addr`
+antes de correr `--configure-network` (ver sección 5). La IP del master
+(`192.168.2.2/24`) y el gateway (`192.168.2.1`, el MikroTik) quedan fijos,
+sin importar qué máquina haga de master. Corre `./setup-master.sh --help`
+para ver todas las flags.
+
+Si prefieres los pasos manuales (o quieres entender qué hace el script por
+debajo):
+
+```bash
+# Desde la raíz del repo (no solo esta carpeta — el boot/ generado se comparte)
 sudo ./scripts/02-build-huronos-boot.sh
 ./scripts/02c-build-hmm-layer.sh          # si no se hizo antes
 ./scripts/02e-build-hnetsync-layer.sh     # si no se hizo antes
 sudo ./scripts/02b-setup-directives.sh
 
-# 2. Usar el boot.ipxe adaptado a hardware real (server=192.168.2.2)
+# Usar el boot.ipxe adaptado a hardware real (server=192.168.2.2)
 cp experimento_hardware_real/boot.ipxe boot/boot.ipxe
 
-# 3. Levantar el contenedor con la config de esta carpeta
+# Levantar el contenedor con la config de esta carpeta
 cd experimento_hardware_real
 docker compose build
 docker compose up -d
 ```
 
-Nota: `boot/boot.ipxe` normalmente está versionado con `set server 192.168.100.1` (valor de la simulación QEMU). El paso 2 lo sobreescribe para hardware real — si vuelves a correr la simulación QEMU después, recuerda restaurarlo con `git checkout boot/boot.ipxe`.
+Nota: `boot/boot.ipxe` normalmente está versionado con `set server 192.168.100.1` (valor de la simulación QEMU). Copiar el de esta carpeta lo sobreescribe para hardware real — si vuelves a correr la simulación QEMU después, recuerda restaurarlo con `git checkout boot/boot.ipxe`.
 
 ### 6.1 Chainload TFTP para firmware PXE no-iPXE (necesario en hardware real)
 
