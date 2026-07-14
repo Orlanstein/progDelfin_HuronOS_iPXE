@@ -1,0 +1,15 @@
+services:
+  master:
+    build:
+      context: ../master
+    container_name: ipxe-master
+    network_mode: host
+    volumes:
+      - ../boot:/var/www/boot:ro
+      - ../sync-data:/var/sync-data
+      - ./master/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - ./tftpboot:/var/ftpd:ro
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_BIND_SERVICE
