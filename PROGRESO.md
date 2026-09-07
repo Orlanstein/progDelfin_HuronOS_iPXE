@@ -107,6 +107,7 @@ Implementación (sin tocar ningún archivo original de HuronOS más de lo estric
 - `scripts/02b-setup-directives.sh`: publica `directives.hdf` y extrae el catálogo `.hsm` completo de la ISO a `boot/software/`.
 
 **Dos bugs encontrados y corregidos durante la verificación:**
+
 - `readlink -f` exige que todos los directorios padre de la ruta ya existan; como `huronOS/software/<categoría>/` no existe hasta que se descarga algo ahí, `MODULE_PATH` se resolvía a `""` antes de que el parche pudiera actuar. Corrección: crear el directorio padre y descargar contra la ruta cruda (`$1`) antes de llamar a `readlink -f`.
 - `cp -a` desde la ISO preservaba permisos root-only, y `nginx` corre como `www-data` dentro del contenedor → 404 al pedir un `.hsm`. Corrección: `chmod -R a+rX` sobre `boot/software/` en `02b-setup-directives.sh`.
 
@@ -136,6 +137,7 @@ Se agregó además un log propio (`/var/log/hnetsync-initrd.log`, escrito direct
 Primer despliegue fuera de la simulación QEMU: RPi como master (dnsmasq+nginx+sync-server, igual que en `master/`), un MikroTik hEX lite como router/switch dedicado del segmento de examen (aislado del modem/ISP, igual rol que cumplía `br-ipxe` en la simulación), y la laptop del usuario como primera PC cliente física. Todo lo específico de hardware real vive en `experimento_hardware_real/` (ver `LABORATORIO-REAL.md`), sin tocar `master/`, `docker-compose.yml` ni `boot/boot.ipxe` de la raíz.
 
 **Red de la RPi (Ubuntu, NetworkManager+netplan+cloud-init):**
+
 - La RPi administra dos interfaces: `wlan0` (WiFi de casa, para SSH/administración) y `eth0` (segmento aislado del MikroTik, IP estática `192.168.2.2/24`). El `nmcli connection modify`/`up` sobre `eth0` no pisó la sesión SSH por `wlan0`.
 - Bug encontrado: `/etc/netplan/50-cloud-init.yaml` (generado por cloud-init en cada boot) competía con el perfil de NetworkManager, dejando una IP secundaria fantasma (`192.168.2.10`) además de la correcta. Corrección: `network: {config: disabled}` en `/etc/cloud/cloud.cfg.d/`, para que cloud-init deje de regenerar netplan.
 - Bug encontrado: el archivo netplan generado por NetworkManager (`90-NM-*.yaml`) terminó con `gateway4:` (sintaxis vieja) **y** `routes:` (sintaxis nueva) para la misma interfaz al mismo tiempo — `netplan apply` colgado con "Conflicting default route declarations". Corrección: eliminar la línea `gateway4:` a mano, dejando solo `routes:`.
@@ -159,6 +161,7 @@ Diagnóstico confirmado con un shell de depuración (`docker compose run --rm --
 **Corrección:** `master/entrypoint.sh` ahora espera (hasta 30s, sondeando cada segundo) a que la interfaz declarada en `/etc/dnsmasq.conf` (parseada genéricamente con `grep -oP '^interface=\K.*'`, válido tanto para `br-ipxe` en la simulación como para `eth0` en hardware real) tenga una IP asignada antes de lanzar `nginx`/`dnsmasq`/`sync-server`. Verificado en vivo: la RPi se reinició por completo y el contenedor quedó arriba sin entrar en el crash loop.
 
 **Herramientas nuevas** (para no depender de recordar la secuencia manual de comandos):
+
 - `install.sh` (raíz): instala por `apt` las dependencias del proyecto, autodetectando por arquitectura si aplica el set de la simulación QEMU (`qemu-system-x86`, `ipxe-qemu`, x86_64) o el del master de hardware real (`whiptail`, `network-manager`, aarch64/armv7l), además de las comunes a ambos (`docker.io`, `docker-compose-v2`, `squashfs-tools`, `kmod`, `curl`, `git`, `iproute2`, `iptables`). Habilita el servicio Docker y agrega al usuario al grupo `docker`.
 - `experimento_hardware_real/setup-master.sh`: automatiza el setup/reinicio completo del master (verifica herramientas, genera `boot/` desde la ISO, regenera capas `hmm`/`hnetsync`, descarga `snponly.efi` si falta, copia el `boot.ipxe` de hardware real, configura red opcionalmente, levanta el contenedor) — un solo comando tanto para una máquina nueva como para un reinicio rápido (`--skip-boot-build`).
 - `experimento_hardware_real/master-tui.sh`: dashboard en terminal (whiptail) para el día a día — estado del contenedor, logs en vivo, elegir/editar `directives.hdf`, alternar `EventConfig`/`ContestConfig`, iniciar/detener/reiniciar el contenedor, configurar red, y un panel de enlaces de referencia (docs de HuronOS, repo oficial de build, ejemplos de `directives.hdf`).
