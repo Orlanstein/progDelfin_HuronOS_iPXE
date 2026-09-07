@@ -14,9 +14,10 @@ if ! ip link show br-ipxe &>/dev/null; then
 fi
 
 # Verificar que los archivos de boot existen
-if [ ! -f "${PROJECT_DIR}/boot/vmlinuz" ]; then
-    echo "[ERROR] No se encontró boot/vmlinuz. Ejecuta primero:"
-    echo "  sudo ./scripts/02-extract-iso.sh"
+if [ ! -f "${PROJECT_DIR}/boot/initrfs.img" ] || [ ! -f "${PROJECT_DIR}/boot/huronos-system.sfs" ]; then
+    echo "[ERROR] No se encontraron los archivos de boot de HuronOS. Ejecuta primero:"
+    echo "  ./scripts/00-build-kernel.sh   (una sola vez)"
+    echo "  sudo ./scripts/02-build-huronos-boot.sh"
     exit 1
 fi
 

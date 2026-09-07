@@ -1,12 +1,14 @@
 services:
   master:
     build:
-      context: ./master
+      context: ../master
     container_name: ipxe-master
     network_mode: host
     volumes:
-      - ./boot:/var/www/boot:ro
-      - ./sync-data:/var/sync-data
+      - ../boot:/var/www/boot:ro
+      - ../sync-data:/var/sync-data
+      - ./master/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - ./tftpboot:/var/ftpd:ro
     restart: unless-stopped
     cap_add:
       - NET_ADMIN

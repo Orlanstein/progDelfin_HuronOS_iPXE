@@ -17,16 +17,16 @@ if ! ip link show tap0 &>/dev/null; then
     exit 1
 fi
 
-echo "[slave1] Iniciando VM esclava 1 (tap0, 4 GB RAM, SDL)..."
+echo "[slave1] Iniciando VM esclava 1 (tap0, 6 GB RAM, SDL)..."
 
 qemu-system-x86_64 \
     -name "slave1" \
     -enable-kvm \
     -cpu host \
-    -m 4096 \
+    -m 6144 \
     -smp 2 \
     -netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
-    -device e1000,netdev=net0,romfile="${IPXE_ROM}" \
+    -device e1000,netdev=net0,mac=52:54:00:12:34:01,romfile="${IPXE_ROM}" \
     -boot order=n \
     -display sdl,gl=off,window-close=on \
     -vga std \

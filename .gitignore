@@ -1,16 +1,13 @@
+# Paper
+Paper/
+
 # ISOs — nunca en el repo (varios GB)
 *.iso
 
-# Archivos extraídos del ISO — se regeneran con 02-extract-iso.sh
-boot/vmlinuz
-boot/initrd
-
-# Squashfs y binarios del casper — se sirven desde el ISO montado por NFS
-boot/casper/*.squashfs
-boot/casper/*.manifest
-boot/casper/*.size
-boot/casper/*.yaml
-boot/casper/*.gpg
+# Archivos generados por scripts/00-build-kernel.sh y 02-build-huronos-boot.sh
+kernel-cache/
+boot/
+boot/casper/
 
 # Docker
 master/.env
@@ -20,3 +17,16 @@ master/.env
 .vscode/
 *.swp
 *~
+# Archivos generados pesados
+*.iso
+*.img
+*.qcow2
+*.vmdk
+*.ova
+kernel-cache/
+master/
+# Sistema Live generado
+boot/*.sfs
+
+# Datos de persistencia event/contest subidos por las VMs (hnetsync)
+sync-data/

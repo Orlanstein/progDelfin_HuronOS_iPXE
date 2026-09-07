@@ -1,10 +1,10 @@
 #!ipxe
 
 echo ============================================
-echo  iPXE Boot - HuronOS (netboot)
+echo  iPXE Boot - HuronOS (netboot) - HARDWARE REAL
 echo ============================================
 
-set server 192.168.100.1
+set server 192.168.2.2
 
 echo Cargando kernel...
 kernel http://${server}/vmlinuz-6.0.15-huronos+ vga=normal acpi=force rw printk.time=0 consoleblank=0 quiet loglevel=3 console=ttyS0,115200 console=tty1 huronos.flags=(netboot=true;system.url=http://${server}/huronos-system.sfs;persistence=true;cache=2048;directives.url=http://${server}/directives.hdf;directives.server=${server};software.url=http://${server}/software) ---

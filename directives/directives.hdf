@@ -1,0 +1,51 @@
+[Global]
+TimeZone=America/Mexico_City
+ConfigExpirationTime=never
+AvailableKeyboardLayouts=latam|us|
+DefaultKeyboardLayout=latam
+EventConfig=true
+ContestConfig=true
+
+[Always]
+# Bloqueo de IAs por exclusión (Lista blanca de navegación permitida)
+AllowedWebsites=google.com|github.com|stackoverflow.com|w3schools.com|wikipedia.org|
+AllowUsbStorage=true
+# Se incluyen VS Code, PyCharm e IntelliJ IDEA
+AvailableSoftware=internet/chromium|internet/firefox|langs/g++|langs/gcc|langs/python3|langs/javac|tools/konsole|programming/vscode|programming/pycharm|programming/intellij|
+Bookmarks={Google^https://google.com}|
+Wallpaper=default
+
+[Event]
+# Modo Clase/Práctica libre sin acceso a herramientas de IA
+AllowedWebsites=google.com|github.com|stackoverflow.com|gcc.gnu.org|python.org|en.cppreference.com|docs.oracle.com|
+AllowUsbStorage=true
+# Entorno completo de desarrollo para las prácticas del laboratorio
+AvailableSoftware=internet/chromium|internet/firefox|langs/g++|langs/gcc|langs/python3|langs/javac|tools/konsole|programming/vscode|programming/vsc-cpptools|programming/vsc-cpp-compile-run|programming/pycharm|programming/intellij|
+Bookmarks={Manual_GCC^https://gcc.gnu.org/onlinedocs/}|{CppReference^https://en.cppreference.com}|
+Wallpaper=default
+
+[Contest]
+# Modo Examen: Bloqueo estricto tradicional (Solo el juez en línea, sin USBs y sin IDEs con autocompletado avanzado)
+AllowedWebsites=omegaup.com|codeforces.com|
+AllowUsbStorage=false
+AvailableSoftware=internet/chromium|langs/g++|langs/gcc|langs/python3|tools/konsole|programming/codeblocks|programming/vim|
+Bookmarks={OmegaUp^https://omegaup.com}|{Codeforces^https://codeforces.com}|
+Wallpaper=default
+
+# OJO: get_directives_times (libhapply.so) concatena TODAS las lineas de la
+# seccion (comentarios incluidos) y las divide con "xargs -n 2" ignorando los
+# saltos de linea -- cualquier comentario CON NUMERO IMPAR de palabras dentro
+# de [Event-Times]/[Contest-Times] desalinea el START/END de cada par de fechas.
+# Por eso los comentarios de estas dos secciones van AQUI AFUERA, nunca adentro.
+# Ajusta las fechas y horas a las de tus clases reales (Formato ISO 8601).
+# Prueba real: 2026-07-13 10:00 -> 2026-07-16 23:59:59 (America/Mexico_City,
+# la TimeZone del [Global] de este archivo). Contest tiene prioridad sobre Event
+# si se solapan (select_mode_to_apply en libhapply.so) -- por eso [Contest-Times]
+# de abajo se deja en una ventana ya vencida, para no pisar esta prueba de Event.
+[Event-Times]
+2026-06-29T09:00:00 2026-06-29T18:00:00
+2026-06-30T09:00:00 2026-06-30T18:00:00
+2026-07-13T10:00:00 2026-07-16T23:59:59
+
+[Contest-Times]
+2026-07-11T17:00:00 2026-07-12T17:00:00
