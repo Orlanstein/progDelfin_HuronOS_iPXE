@@ -1,0 +1,35 @@
+<!--
+Segunda versión — HTML listo para pegar en el "Source" de cada caja del
+formulario de Delfín (Planteamiento / Metodología / Conclusiones / Referencias).
+Recortada para que el resumen completo (los 4 campos sumados) no exceda
+6000 caracteres. Copia el contenido de cada bloque CAMPO a su caja
+correspondiente (sin los comentarios delimitadores).
+-->
+
+<!-- CAMPO: Planteamiento -->
+<p>Los laboratorios de examen y de concurso de programación que aún requieren una memoria USB arrancable por estación no escalan: cada cambio de política implica regrabar, a mano, tantas memorias como equipos existan. Huron OS, el sistema operativo construido para reforzar la integridad de exámenes (bloqueo de sitios, bloqueo de USB, horarios programados), parecía atado por diseño a un medio USB, hasta que sus propias herramientas oficiales de compilación revelaron la causa real: el kernel ya incluye los controladores de red que necesita, desactivados por un simple interruptor de compilación. Proyectos como LTSP y FAI resuelven el arranque por red de un laboratorio, pero sin un modelo de directivas de examen nativo; Safe Exam Browser bloquea el escritorio, pero asume que el sistema ya está instalado localmente. Huron OS ocupa el espacio entre ambos: la pregunta que guía este trabajo es si puede arrancar por completo a través de la red —kernel, datos y directivas de examen— sin modificar el proyecto oficial de forma irreversible ni perder ninguna de sus garantías de seguridad.</p>
+
+<!-- CAMPO: Metodología -->
+<p>Un primer intento de arrancar Huron OS por iPXE, replicando un procedimiento ya validado con Ubuntu 24 LTS, falló: el initramfs oficial no trae los archivos para recuperar los datos por HTTP, y el kernel de la ISO oficial no tiene ningún controlador de red compilado. Revisando el repositorio oficial de compilación se encontró la causa real: la configuración del kernel ya habilita esos controladores como módulos cargables, y una variable de entorno de compilación decide si se copian al initramfs; por defecto vale "false", produciendo intencionalmente una imagen sin red. La ausencia de soporte de red es una decisión de compilación, no una limitación del kernel.</p>
+
+<p>A partir de ese hallazgo se recompiló el kernel activando esa variable y se añadieron tres parches aditivos, activos solo en modo red: uno que recupera la imagen del sistema por HTTP hacia RAM en vez de buscar un USB físico; uno que descarga bajo demanda, desde el servidor maestro, solo el software que la directiva activa solicite (evitando un límite de 4 GiB en el montador HTTP usado); y uno que sincroniza, identificando cada cliente por su MAC, el trabajo del usuario entre reinicios. La solución se validó primero en un laboratorio virtual con QEMU orquestado por contenedores, y después en un piloto de hardware real con una Raspberry Pi como servidor maestro, un router MikroTik dedicado que aísla el segmento de examen, y una laptop física como cliente PXE.</p>
+
+<!-- CAMPO: Conclusiones -->
+<p>Este trabajo demuestra que una distribución diseñada exclusivamente para USB puede arrancar por red sin modificar su propia lógica de seguridad y de directivas, identificando la causa real de la limitación —una variable de compilación, no el kernel— y añadiendo solo un pequeño número de parches aditivos. La solución se validó primero en simulación y después, con ajustes propios de firmware y equipo real, en un piloto físico.</p>
+
+<p>La limitación más relevante encontrada es que la persistencia del trabajo del usuario entre reinicios, ya validada en simulación mediante identificación por MAC, falla en hardware real. Su severidad depende del caso de uso: en un examen, donde el trabajo suele existir solo de forma local hasta la entrega final, perder la persistencia es un riesgo real; en un concurso, el impacto es menor porque las soluciones ya se entregan de forma incremental a un juez en línea. En el piloto real también se documentaron, exclusivamente ahí, un arranque de ~2:30 min y un retraso adicional de ~2 min en software pesado, ninguno reportado en simulación. El trabajo futuro inmediato es diagnosticar la falla de persistencia comparando el apagado real contra el de una máquina virtual, aislar el cuello de botella del tiempo de arranque y del retraso de software, y escalar el piloto a más estaciones simultáneas.</p>
+
+<!-- CAMPO: Referencias -->
+<ul>
+<li>Juárez Cruz, O. G., Ortiz-Bejar, J., Cerda-Jacobo, J. Deployment of Huron OS via iPXE Network Boot for Exam Labs. Artículo sometido a ROPEC 2026, IEEE, Morelia, México.</li>
+<li>Quetzalcoatl, E. et al. huronOS-build-tools. GitHub: github.com/equetzal/huronOS-build-tools</li>
+<li>Juárez Cruz, O. G. huronos_directives. GitHub: github.com/Orlanstein/huronos_directives</li>
+<li>iPXE Project. Open source network boot firmware. ipxe.org</li>
+<li>Kelley, S. dnsmasq: lightweight DHCP/DNS server. thekelleys.org.uk/dnsmasq</li>
+<li>Intel Corp. y SystemSoft. Preboot Execution Environment (PXE) Specification v2.1, 1999.</li>
+<li>Docker Inc. Docker Compose overview. docs.docker.com/compose</li>
+<li>MikroTik. RouterOS documentation. help.mikrotik.com/docs</li>
+<li>LTSP Project. Linux Terminal Server Project. ltsp.org</li>
+<li>FAI Project. Fully Automatic Installation. fai-project.org</li>
+<li>Safe Exam Browser Project. safeexambrowser.org</li>
+</ul>
