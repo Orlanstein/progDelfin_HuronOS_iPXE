@@ -18,13 +18,10 @@ master/.env
 *.swp
 *~
 # Archivos generados pesados
-*.iso
 *.img
 *.qcow2
 *.vmdk
 *.ova
-kernel-cache/
-master/
 # Sistema Live generado
 boot/*.sfs
 
