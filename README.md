@@ -144,17 +144,37 @@ progDelfin_iPXE/
     ├── 02b-setup-directives.sh      ← publica directives.hdf y boot/software/*.hsm
     ├── 02c-build-hmm-layer.sh       ← empaqueta huronos-patch/hmm en 06-netboot-hmm.hsl
     ├── 02e-build-hnetsync-layer.sh  ← empaqueta huronos-patch/hnetsync en 07-hnetsync.hsl
-    ├── 03-start-master.sh           ← docker compose up
+    ├── 03-start-master.sh           ← docker compose build + up
+    ├── 03b-verify-master.sh         ← chequea que el master esté sano (no solo "creado")
     ├── 04-start-slave1.sh           ← QEMU slave 1 (tap0, mac=52:54:00:12:34:01)
     ├── 04-start-slave2.sh           ← QEMU slave 2 (tap1, mac=52:54:00:12:34:02)
+    ├── 04b-start-slave1-checked.sh  ← wrapper de 04-start-slave1.sh con preflight
+    ├── 04b-start-slave2-checked.sh  ← wrapper de 04-start-slave2.sh con preflight
+    ├── 05-run-full-boot.sh          ← corre 01+02c+02e+02+02b+03+03b en orden (atajo)
     └── 99-teardown.sh               ← limpieza total
 ```
+
+Los scripts `03b`/`04b`/`05` son wrappers agregados después de un incidente real (ver `PROGRESO.md`, sección 15): no reemplazan ni modifican los scripts originales (`01`–`04`), solo los invocan en orden y agregan chequeos de salud que antes había que verificar a mano.
 
 ---
 
 ## Puesta en marcha
 
-Ejecutar **en este orden** desde el directorio raíz del proyecto:
+Ejecutar **en este orden** desde el directorio raíz del proyecto.
+
+### Camino rápido (recomendado, salvo la primera vez)
+
+Una vez que `kernel-cache/` ya existe (paso 1 hecho al menos una vez), los pasos 2 a 4 se pueden correr de un tirón:
+
+```bash
+./scripts/05-run-full-boot.sh
+```
+
+Corre red virtual → capas `hmm`/`hnetsync` (solo si faltan) → `boot/` → directivas/software → master → verificación de que el master realmente esté sirviendo (no solo "creado"). Pide `sudo` varias veces (monta la ISO). Si algo fallara a mitad de camino, seguí con los pasos manuales de abajo para aislar en qué paso quedó.
+
+**Siempre** que se corre esto con las VMs esclavas ya prendidas, hay que **reiniciarlas después** (ver nota al final del paso 5) — `huronos-system.sfs` y `directives.hdf` solo se leen al arrancar.
+
+### Pasos manuales (para diagnosticar o repetir uno solo)
 
 ### 1. Compilar el kernel con soporte de red (una sola vez)
 
@@ -196,9 +216,10 @@ Nota sobre `02e-build-hnetsync-layer.sh`: si cambia `huronos-patch/livekitlib` (
 
 ```bash
 ./scripts/03-start-master.sh
+./scripts/03b-verify-master.sh
 ```
 
-Verificar que funciona:
+`03-start-master.sh` devuelve éxito con solo crear el contenedor — no garantiza que siga arriba (ver "Solución de problemas" más abajo, `docker-compose.yml` usa `network_mode: host` y puede chocar con servicios del sistema en el puerto 80). `03b-verify-master.sh` es el chequeo real: confirma que el contenedor esté `running` (no reiniciando en loop) y que `boot.ipxe`/`huronos-system.sfs` respondan por HTTP; si no, diagnostica por qué. Equivalente manual:
 
 ```bash
 curl http://192.168.100.1/boot.ipxe
@@ -210,13 +231,37 @@ docker logs -f ipxe-master
 
 ```bash
 # Terminal 1
-sudo ./scripts/04-start-slave1.sh
+sudo ./scripts/04b-start-slave1-checked.sh
 
 # Terminal 2
-sudo ./scripts/04-start-slave2.sh
+sudo ./scripts/04b-start-slave2-checked.sh
 ```
 
+Los wrappers `04b-*-checked.sh` corren `03b-verify-master.sh` antes de abrir la ventana de QEMU (si el master no responde, avisan y no lanzan la VM) y después ejecutan el script original (`04-start-slave1.sh`/`04-start-slave2.sh`) sin modificarlo. Para lanzar directo sin el chequeo previo, seguí usando `04-start-slave1.sh`/`04-start-slave2.sh` a secas.
+
 El log de arranque aparece en la terminal donde se lanzó el script (`-serial stdio`). Debe mostrar `huronOS Init process`, `Fetching huronOS system data from ...`, y terminar en `huronOS ready!, starting contest enviroment`.
+
+**Si las VMs ya estaban arrancadas y después cambiaste algo en `boot/`** (regeneraste `huronos-system.sfs`, agregaste las capas `06-netboot-hmm.hsl`/`07-hnetsync.hsl`, o publicaste `directives.hdf`/`boot/software/` por primera vez): las VMs corriendo **no** lo recogen solas. `huronos-system.sfs` se descarga una sola vez al arrancar (queda en RAM), y sin la capa `06-netboot-hmm.hsl` ya montada, `hmm` no sabe pedir `.hsm` al master aunque `directives.hdf` ya esté publicado. Hay que cerrar las VMs (`Ctrl+C` en cada terminal) y volver a lanzarlas.
+
+---
+
+## Solución de problemas
+
+Incidentes reales encontrados montando este entorno desde cero en una máquina nueva (detalle completo en `PROGRESO.md`, sección 15):
+
+**`00-build-kernel.sh` falla con `404 Not Found` bajando paquetes de `security.debian.org`**
+Debian 11 (bullseye) salió de soporte LTS y `security.debian.org` retira los `.deb` en vivo mientras `archive.debian.org` todavía no los re-aloja — el índice apt sigue anunciando versiones que ya no están en el pool. `00-build-kernel.sh` fija el `sources.list` del contenedor de build a un snapshot congelado de `snapshot.debian.org` (variable `SNAPSHOT_DATE` cerca del inicio del script) para evitar depender del mirror en vivo. Si esto vuelve a romperse en el futuro (el snapshot elegido también puede quedar fuera de rango, o Debian puede retirar snapshots viejos), hay que:
+1. Confirmar el rango de fechas en que `bullseye-security` sigue teniendo los `.deb` reales (no solo el índice) probando `curl -I` contra `http://snapshot.debian.org/archive/debian-security/<fecha>/pool/...` de algún paquete de la lista `PACKAGES` en `build-kernel.sh`.
+2. Actualizar `SNAPSHOT_DATE` a una fecha dentro de ese rango (tiene que ser una única fecha para las tres líneas del `sources.list` — main, updates y security — para que las versiones ya instaladas en la imagen `debian:bullseye` no queden en conflicto con lo que ofrece `main`).
+
+**`03-start-master.sh` "funciona" pero el contenedor entra en crash-loop (`nginx: bind() to 0.0.0.0:80 failed: Address already in use`)**
+`docker-compose.yml` usa `network_mode: host`, así que el `nginx` del master compite directo por el puerto 80 **del host**, no solo con otros contenedores. Si la máquina ya tiene algo en el 80 (Apache, otro nginx, etc.) el contenedor arranca, falla, y `restart: unless-stopped` lo reinicia en loop indefinidamente — `docker compose up -d` no avisa de esto porque el contenedor sí se crea. `03b-verify-master.sh` detecta este caso específico y sugiere el servicio a detener. Solución: `sudo systemctl stop <servicio>` (y `disable` si no hace falta), después `docker compose restart ipxe-master` (o volver a correr `03-start-master.sh`).
+
+**Las VMs arrancan pero no tienen `AvailableSoftware` ni las directivas del examen**
+Ver la nota al final del paso 5 de "Puesta en marcha" — casi siempre es que `kernel-cache/06-netboot-hmm.hsl`, `boot/directives.hdf` o `boot/software/` no se habían generado/publicado todavía cuando las VMs arrancaron por primera vez (`02c`/`02e`/`02b` son pasos separados de `02`, fáciles de olvidar). Confirmar mirando el log de nginx del master: `docker exec ipxe-master tail -f /var/log/nginx/boot-access.log` — si aparece `GET /directives.hdf ... 404` repitiéndose cada ~60s, confirma que nunca se publicó. Correr los scripts que falten y **reiniciar las VMs** (no alcanza con que el master ya sirva bien; ver nota del paso 5).
+
+**Un archivo que debería estar en `master/` no aparece en `git status` después de crearlo**
+Ya corregido, pero por si se reintroduce: revisar que `.gitignore` no tenga una regla de bloque completo tipo `master/` — `git add` lo ignora en silencio sin ningún error visible. `master/.env` es lo único de esa carpeta que debe estar ignorado.
 
 ---
 
