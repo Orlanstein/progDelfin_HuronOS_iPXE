@@ -85,7 +85,7 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 | `kmod` | cualquiera | Para `depmod` al empaquetar los módulos compilados |
 | KVM | — | `/dev/kvm` debe existir (`lsmod | grep kvm`) |
 | RAM host | 14 GB+ | 6 GB por slave (incluye caché de httpfs2) + SO host + Docker |
-| Espacio en disco | ~10 GB temporales | Solo durante `00-build-kernel.sh` (fuentes del kernel); el resultado final pesa unos 15 MB. +840 MB si además corrés `00a-vendor-dependencies.sh` |
+| Espacio en disco | ~5 GB (ISO) + ~10 GB temporales | ISO permanente (paso 0); ~10 GB solo durante `00-build-kernel.sh` (fuentes del kernel), resultado final ~15 MB. +840 MB si además corrés `00a-vendor-dependencies.sh` |
 
 `./install.sh` instala estos paquetes por apt (Debian/Ubuntu/Raspberry Pi OS),
 autodetectando por arquitectura si aplica el set de la simulación QEMU, el del
@@ -98,7 +98,7 @@ o ambos. Ver `./install.sh --help` para forzar uno u otro grupo.
 
 ```
 progDelfin_iPXE/
-├── huronOS-alpha-0.4-amd64.iso   ← ISO fuente (no en git)
+├── huronOS-alpha-0.4-amd64.iso   ← ISO fuente (no en git, ver "Puesta en marcha" paso 0)
 ├── huronos-patch/
 │   ├── livekitlib                 ← modifica lib/livekitlib del initrd: agrega
 │   │                                 find_data_netboot(), tmpfs para event/contest,
@@ -167,6 +167,21 @@ Los scripts `03b`/`04b`/`05` son wrappers agregados después de un incidente rea
 ## Puesta en marcha
 
 Ejecutar **en este orden** desde el directorio raíz del proyecto.
+
+### 0. Conseguir la ISO de HuronOS (una sola vez, fuera de git)
+
+`huronOS-alpha-0.4-amd64.iso` **no está en el repo** (~5 GB, ver `.gitignore`) y hoy no hay ningún link a ella dentro del propio repo — hay que bajarla aparte, una sola vez, y dejarla en la raíz del proyecto:
+
+```bash
+curl -fSLo huronOS-alpha-0.4-amd64.iso https://mirrors.huronos.org/huronOS/alpha/huronOS-alpha-0.4-amd64.iso
+echo "b9d530bc7e5b862de9e20c6ce1690ab90f993c6bfa7b44655234708f4e06b2e9  huronOS-alpha-0.4-amd64.iso" | sha256sum -c
+```
+
+Es la versión "huronOS Queue 0.4" publicada en [huronos.org/download](https://huronos.org/download). El checksum de arriba es el que publica esa página (`sha256sum`, tiene que decir `OK`); si en algún momento cambia la versión soportada por este repo, hay que actualizar tanto el nombre de archivo (`ISO="..."` en `scripts/02-build-huronos-boot.sh` y `scripts/02b-setup-directives.sh`) como este checksum. Ese sitio también lista mirrors alternativos si la descarga directa va lenta.
+
+Sin este archivo, ningún paso de "Construir los archivos de boot" de abajo puede correr (necesitan montarla), aunque el kernel de `boot/` ya venga compilado en el repo.
+
+Si vas a preparar un master de hardware real (Raspberry Pi u otro ARM) y ya bajaste la ISO en otra máquina, es más rápido copiarla directo (`scp huronOS-alpha-0.4-amd64.iso pi@<host>:~/progDelfin_HuronOS_iPXE/`) que volver a descargar 5 GB — mismo criterio que `experimento_hardware_real/setup-master.sh` ya sugiere para este archivo.
 
 ### Camino rápido (recomendado, salvo la primera vez)
 
