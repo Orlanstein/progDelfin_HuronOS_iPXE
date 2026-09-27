@@ -85,7 +85,7 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 | `kmod` | cualquiera | Para `depmod` al empaquetar los módulos compilados |
 | KVM | — | `/dev/kvm` debe existir (`lsmod | grep kvm`) |
 | RAM host | 14 GB+ | 6 GB por slave (incluye caché de httpfs2) + SO host + Docker |
-| Espacio en disco | ~10 GB temporales | Solo durante `00-build-kernel.sh` (fuentes del kernel); el resultado final pesa unos 15 MB |
+| Espacio en disco | ~10 GB temporales | Solo durante `00-build-kernel.sh` (fuentes del kernel); el resultado final pesa unos 15 MB. +840 MB si además corrés `00a-vendor-dependencies.sh` |
 
 `./install.sh` instala estos paquetes por apt (Debian/Ubuntu/Raspberry Pi OS),
 autodetectando por arquitectura si aplica el set de la simulación QEMU, el del
@@ -120,6 +120,11 @@ progDelfin_iPXE/
 │   ├── initrfs.img                ← initrd recompilado con huronos-patch/livekitlib
 │   ├── 06-netboot-hmm.hsl         ← capa aditiva con huronos-patch/hmm
 │   └── 07-hnetsync.hsl            ← capa aditiva con huronos-patch/hnetsync
+├── vendor/                        ← cache local opcional, salida de
+│   │                                 00a-vendor-dependencies.sh (no en git, ~840 MB)
+│   ├── docker/debian-bullseye.tar ← imagen base (docker save)
+│   ├── src/*.tar.gz               ← huronOS-build-tools, linux-6.0.15, aufs-standalone/util
+│   └── debs/*.deb + Packages.gz   ← repo apt local (paquetes de build-kernel.sh)
 ├── boot/                          ← archivos servidos por nginx (generados)
 │   ├── boot.ipxe                  ← script de arranque iPXE
 │   ├── vmlinuz-6.0.15-huronos+
@@ -138,6 +143,7 @@ progDelfin_iPXE/
 ├── docker-compose.yml
 └── scripts/
     ├── 00-build-kernel.sh           ← (una sola vez) recompila el kernel con NETWORK=true
+    ├── 00a-vendor-dependencies.sh   ← (opcional) empaqueta en vendor/ todo lo que pide 00-*
     ├── 00b-rebuild-initrd.sh        ← reconstruye solo el initrd (sin recompilar el kernel)
     ├── 01-setup-network.sh          ← crea br-ipxe, tap0, tap1 + NAT a internet
     ├── 02-build-huronos-boot.sh     ← copia kernel-cache/ a boot/ y genera el .sfs
@@ -183,6 +189,14 @@ Corre red virtual → capas `hmm`/`hnetsync` (solo si faltan) → `boot/` → di
 ```
 
 Clona `huronOS-build-tools`, aplica `huronos-patch/livekitlib`, y compila el kernel `6.0.15-huronos+` (mismo `.config` oficial) dentro de un contenedor `debian:bullseye`, con `NETWORK=true` para que el initrd incluya `e1000`/`e1000e`. Es una compilación de kernel real — puede tardar bastante (hasta un par de horas según CPU). Resultado en `kernel-cache/`. Solo hay que repetir este paso si cambia la versión de HuronOS o el parche.
+
+#### 1b. (Opcional, recomendado) Empaquetar las dependencias externas primero
+
+```bash
+./scripts/00a-vendor-dependencies.sh
+```
+
+Descarga y guarda en `vendor/` (gitignored, ~840 MB) todo lo que el paso 1 pide a internet: la imagen `debian:bullseye`, los cuatro repos que clona (`huronOS-build-tools`, el kernel de Linux, `aufs-standalone`, `aufs-util`), y los ~380 `.deb` que instala, como un repo apt local. `00-build-kernel.sh` detecta `vendor/` solo y lo usa automáticamente en vez de salir a la red — si no existe, el comportamiento es idéntico al de siempre, así que este paso se puede saltar sin problema. Vale la pena correrlo **una vez que el kernel ya compiló bien** (ver "Solución de problemas" más abajo: bullseye ya rompió una vez sin aviso porque `security.debian.org` retiró paquetes en vivo — `vendor/` es el seguro contra que vuelva a pasar). Re-correr este script si se cambia `SNAPSHOT_DATE` en `00-build-kernel.sh`.
 
 ### 2. Red virtual
 
@@ -253,6 +267,9 @@ Incidentes reales encontrados montando este entorno desde cero en una máquina n
 Debian 11 (bullseye) salió de soporte LTS y `security.debian.org` retira los `.deb` en vivo mientras `archive.debian.org` todavía no los re-aloja — el índice apt sigue anunciando versiones que ya no están en el pool. `00-build-kernel.sh` fija el `sources.list` del contenedor de build a un snapshot congelado de `snapshot.debian.org` (variable `SNAPSHOT_DATE` cerca del inicio del script) para evitar depender del mirror en vivo. Si esto vuelve a romperse en el futuro (el snapshot elegido también puede quedar fuera de rango, o Debian puede retirar snapshots viejos), hay que:
 1. Confirmar el rango de fechas en que `bullseye-security` sigue teniendo los `.deb` reales (no solo el índice) probando `curl -I` contra `http://snapshot.debian.org/archive/debian-security/<fecha>/pool/...` de algún paquete de la lista `PACKAGES` en `build-kernel.sh`.
 2. Actualizar `SNAPSHOT_DATE` a una fecha dentro de ese rango (tiene que ser una única fecha para las tres líneas del `sources.list` — main, updates y security — para que las versiones ya instaladas en la imagen `debian:bullseye` no queden en conflicto con lo que ofrece `main`).
+3. Correr `./scripts/00a-vendor-dependencies.sh` de nuevo para refrescar `vendor/` con la fecha nueva.
+
+Si ya corriste `scripts/00a-vendor-dependencies.sh` antes de que esto se rompa, no hace falta nada de lo anterior: `00-build-kernel.sh` usa `vendor/` automáticamente y no sale a `snapshot.debian.org` para nada.
 
 **`03-start-master.sh` "funciona" pero el contenedor entra en crash-loop (`nginx: bind() to 0.0.0.0:80 failed: Address already in use`)**
 `docker-compose.yml` usa `network_mode: host`, así que el `nginx` del master compite directo por el puerto 80 **del host**, no solo con otros contenedores. Si la máquina ya tiene algo en el 80 (Apache, otro nginx, etc.) el contenedor arranca, falla, y `restart: unless-stopped` lo reinicia en loop indefinidamente — `docker compose up -d` no avisa de esto porque el contenedor sí se crea. `03b-verify-master.sh` detecta este caso específico y sugiere el servicio a detener. Solución: `sudo systemctl stop <servicio>` (y `disable` si no hace falta), después `docker compose restart ipxe-master` (o volver a correr `03-start-master.sh`).

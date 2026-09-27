@@ -26,6 +26,15 @@ JOBS="${JOBS:-$(( $(nproc) / 2 ))}"
 [ "$JOBS" -lt 1 ] && JOBS=1
 BUILD_CONTAINER="huronos-kernel-build-$$"
 
+# vendor/ (scripts/00a-vendor-dependencies.sh) es un cache local opcional con
+# todo lo que este script pide a internet -- GitHub, kernel.org, SourceForge,
+# Docker Hub y snapshot.debian.org. Si existe, se usa en vez de salir a la
+# red (ver PROGRESO.md sección 15, punto 1: bullseye ya rompió una vez sin
+# aviso). Si no existe, el comportamiento es idéntico al de siempre.
+VENDOR_DIR="$PROJECT_DIR/vendor"
+VENDOR_DEBS_AVAILABLE=0
+[ -f "$VENDOR_DIR/debs/Packages.gz" ] && VENDOR_DEBS_AVAILABLE=1
+
 # bullseye salió de soporte LTS en 2026 y security.debian.org ya retiró los
 # .deb en vivo (el índice anuncia versiones -security que ya no están en el
 # pool -> 404 en cascada durante el apt install de ~250 paquetes), mientras
@@ -53,11 +62,43 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[kernel] Clonando huronOS-build-tools..."
-git clone --depth 1 https://github.com/equetzal/huronOS-build-tools.git "$BUILD_LAB"
+if [ -f "$VENDOR_DIR/src/huronOS-build-tools.tar.gz" ]; then
+    echo "[kernel] Extrayendo huronOS-build-tools desde vendor/ (sin salir a internet)..."
+    mkdir -p "$BUILD_LAB"
+    tar -xzf "$VENDOR_DIR/src/huronOS-build-tools.tar.gz" -C "$BUILD_LAB"
+else
+    echo "[kernel] Clonando huronOS-build-tools..."
+    git clone --depth 1 https://github.com/equetzal/huronOS-build-tools.git "$BUILD_LAB"
+fi
 
-echo "[kernel] Fijando apt sources.list a snapshot.debian.org/$SNAPSHOT_DATE (bullseye-security ya no sirve paquetes en vivo)..."
-echo "$SNAPSHOT_SOURCES" > "$BUILD_LAB/builder-scripts/kernel/sources.list"
+# Los tres repos que download_kernel() (dentro de build-kernel.sh) clona por
+# su cuenta -- si ya están vendorizados, se pre-siembran acá para que esos
+# "git clone ... || true" internos no encuentren directorios vacíos y no
+# tengan nada que hacer (su error queda silenciado por el "|| true" de
+# upstream, así que esto no rompe nada si algún tarball falta: simplemente
+# ese repo puntual se clona en vivo como siempre).
+KERNEL_STUFF="$BUILD_LAB/builder-scripts/kernel/kernel-stuff"
+mkdir -p "$KERNEL_STUFF"
+for pair in "linux-6.0.15:linux" "aufs-standalone:aufs-standalone" "aufs-util:aufs-util"; do
+    vendor_name="${pair%%:*}"
+    dir_name="${pair##*:}"
+    if [ -f "$VENDOR_DIR/src/${vendor_name}.tar.gz" ]; then
+        echo "[kernel] Pre-sembrando kernel-stuff/${dir_name} desde vendor/ (sin salir a internet)..."
+        mkdir -p "$KERNEL_STUFF/${dir_name}"
+        tar -xzf "$VENDOR_DIR/src/${vendor_name}.tar.gz" -C "$KERNEL_STUFF/${dir_name}"
+    fi
+done
+
+if [ "$VENDOR_DEBS_AVAILABLE" -eq 1 ]; then
+    echo "[kernel] Usando el repo apt local de vendor/debs/ (sin salir a internet)..."
+    read -r -d '' APT_SOURCES <<EOF || true
+deb [trusted=yes] file:///vendor-debs ./
+EOF
+else
+    echo "[kernel] Fijando apt sources.list a snapshot.debian.org/$SNAPSHOT_DATE (bullseye-security ya no sirve paquetes en vivo)..."
+    APT_SOURCES="$SNAPSHOT_SOURCES"
+fi
+echo "$APT_SOURCES" > "$BUILD_LAB/builder-scripts/kernel/sources.list"
 
 echo "[kernel] Aplicando parche de netboot a lib/livekitlib..."
 cp "$PROJECT_DIR/huronos-patch/livekitlib" "$BUILD_LAB/base-system/livekitlib"
@@ -66,9 +107,20 @@ echo "[kernel] Ajustando paralelismo del build a -j${JOBS}..."
 sed -i "s/make -j 1 bzImage/make -j $JOBS bzImage/; s/make -j 1 modules/make -j $JOBS modules/" \
     "$BUILD_LAB/builder-scripts/kernel/build-kernel.sh"
 
+if ! docker image inspect debian:bullseye >/dev/null 2>&1 && [ -f "$VENDOR_DIR/docker/debian-bullseye.tar" ]; then
+    echo "[kernel] Cargando imagen debian:bullseye desde vendor/ (sin salir a Docker Hub)..."
+    docker load -i "$VENDOR_DIR/docker/debian-bullseye.tar"
+fi
+
+VENDOR_DEBS_MOUNT=()
+if [ "$VENDOR_DEBS_AVAILABLE" -eq 1 ]; then
+    VENDOR_DEBS_MOUNT=(-v "$VENDOR_DIR/debs:/vendor-debs:ro")
+fi
+
 echo "[kernel] Compilando el kernel (esto puede tardar bastante)..."
 docker run -d --name "$BUILD_CONTAINER" \
     -v "$BUILD_LAB/builder-scripts/kernel:/work" \
+    "${VENDOR_DEBS_MOUNT[@]}" \
     -w /work \
     debian:bullseye \
     bash -c './build-kernel.sh --build > /work/build.log 2>&1'
@@ -118,15 +170,16 @@ sed -i 's/export NETWORK=false/export NETWORK=true/' "$BUILD_LAB/base-system/con
 
 mkdir -p "$PROJECT_DIR/kernel-cache" "$BUILD_LAB/initrd-out"
 docker run --rm \
-    -e SNAPSHOT_SOURCES="$SNAPSHOT_SOURCES" \
+    -e APT_SOURCES="$APT_SOURCES" \
     -v "$BUILD_LAB/modules-out/lib/modules/6.0.15-huronos+:/lib/modules/6.0.15-huronos+:ro" \
     -v "$BUILD_LAB/base-system:/work/base-system" \
     -v "$BUILD_LAB/initrd-out:/out" \
+    "${VENDOR_DEBS_MOUNT[@]}" \
     -w /work/base-system \
     debian:bullseye \
     bash -c '
         set -e
-        echo "$SNAPSHOT_SOURCES" > /etc/apt/sources.list
+        echo "$APT_SOURCES" > /etc/apt/sources.list
         apt-get update -qq
         apt-get install -y --no-install-recommends xz-utils cpio kmod findutils procps >/dev/null 2>&1
         export HBT_LAB=/out/build-lab
