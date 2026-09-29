@@ -9,6 +9,10 @@ kernel-cache/
 boot/
 boot/casper/
 
+# Cache local de dependencias externas (scripts/00a-vendor-dependencies.sh)
+# -- varios GB (imagen Docker, fuentes del kernel, .deb), nunca en git.
+vendor/
+
 # Docker
 master/.env
 
@@ -18,13 +22,10 @@ master/.env
 *.swp
 *~
 # Archivos generados pesados
-*.iso
 *.img
 *.qcow2
 *.vmdk
 *.ova
-kernel-cache/
-master/
 # Sistema Live generado
 boot/*.sfs
 

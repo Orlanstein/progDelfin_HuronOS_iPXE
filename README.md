@@ -85,7 +85,7 @@ HOST LINUX (192.168.100.1 en br-ipxe)
 | `kmod` | cualquiera | Para `depmod` al empaquetar los módulos compilados |
 | KVM | — | `/dev/kvm` debe existir (`lsmod | grep kvm`) |
 | RAM host | 14 GB+ | 6 GB por slave (incluye caché de httpfs2) + SO host + Docker |
-| Espacio en disco | ~10 GB temporales | Solo durante `00-build-kernel.sh` (fuentes del kernel); el resultado final pesa unos 15 MB |
+| Espacio en disco | ~5 GB (ISO) + ~10 GB temporales | ISO permanente (paso 0); ~10 GB solo durante `00-build-kernel.sh` (fuentes del kernel), resultado final ~15 MB. +840 MB si además corrés `00a-vendor-dependencies.sh` |
 
 `./install.sh` instala estos paquetes por apt (Debian/Ubuntu/Raspberry Pi OS),
 autodetectando por arquitectura si aplica el set de la simulación QEMU, el del
@@ -98,7 +98,7 @@ o ambos. Ver `./install.sh --help` para forzar uno u otro grupo.
 
 ```
 progDelfin_iPXE/
-├── huronOS-alpha-0.4-amd64.iso   ← ISO fuente (no en git)
+├── huronOS-alpha-0.4-amd64.iso   ← ISO fuente (no en git, ver "Puesta en marcha" paso 0)
 ├── huronos-patch/
 │   ├── livekitlib                 ← modifica lib/livekitlib del initrd: agrega
 │   │                                 find_data_netboot(), tmpfs para event/contest,
@@ -120,6 +120,11 @@ progDelfin_iPXE/
 │   ├── initrfs.img                ← initrd recompilado con huronos-patch/livekitlib
 │   ├── 06-netboot-hmm.hsl         ← capa aditiva con huronos-patch/hmm
 │   └── 07-hnetsync.hsl            ← capa aditiva con huronos-patch/hnetsync
+├── vendor/                        ← cache local opcional, salida de
+│   │                                 00a-vendor-dependencies.sh (no en git, ~840 MB)
+│   ├── docker/debian-bullseye.tar ← imagen base (docker save)
+│   ├── src/*.tar.gz               ← huronOS-build-tools, linux-6.0.15, aufs-standalone/util
+│   └── debs/*.deb + Packages.gz   ← repo apt local (paquetes de build-kernel.sh)
 ├── boot/                          ← archivos servidos por nginx (generados)
 │   ├── boot.ipxe                  ← script de arranque iPXE
 │   ├── vmlinuz-6.0.15-huronos+
@@ -138,23 +143,59 @@ progDelfin_iPXE/
 ├── docker-compose.yml
 └── scripts/
     ├── 00-build-kernel.sh           ← (una sola vez) recompila el kernel con NETWORK=true
+    ├── 00a-vendor-dependencies.sh   ← (opcional) empaqueta en vendor/ todo lo que pide 00-*
     ├── 00b-rebuild-initrd.sh        ← reconstruye solo el initrd (sin recompilar el kernel)
     ├── 01-setup-network.sh          ← crea br-ipxe, tap0, tap1 + NAT a internet
     ├── 02-build-huronos-boot.sh     ← copia kernel-cache/ a boot/ y genera el .sfs
     ├── 02b-setup-directives.sh      ← publica directives.hdf y boot/software/*.hsm
     ├── 02c-build-hmm-layer.sh       ← empaqueta huronos-patch/hmm en 06-netboot-hmm.hsl
     ├── 02e-build-hnetsync-layer.sh  ← empaqueta huronos-patch/hnetsync en 07-hnetsync.hsl
-    ├── 03-start-master.sh           ← docker compose up
+    ├── 03-start-master.sh           ← docker compose build + up
+    ├── 03b-verify-master.sh         ← chequea que el master esté sano (no solo "creado")
     ├── 04-start-slave1.sh           ← QEMU slave 1 (tap0, mac=52:54:00:12:34:01)
     ├── 04-start-slave2.sh           ← QEMU slave 2 (tap1, mac=52:54:00:12:34:02)
+    ├── 04b-start-slave1-checked.sh  ← wrapper de 04-start-slave1.sh con preflight
+    ├── 04b-start-slave2-checked.sh  ← wrapper de 04-start-slave2.sh con preflight
+    ├── 05-run-full-boot.sh          ← corre 01+02c+02e+02+02b+03+03b en orden (atajo)
     └── 99-teardown.sh               ← limpieza total
 ```
+
+Los scripts `03b`/`04b`/`05` son wrappers agregados después de un incidente real (ver `PROGRESO.md`, sección 15): no reemplazan ni modifican los scripts originales (`01`–`04`), solo los invocan en orden y agregan chequeos de salud que antes había que verificar a mano.
 
 ---
 
 ## Puesta en marcha
 
-Ejecutar **en este orden** desde el directorio raíz del proyecto:
+Ejecutar **en este orden** desde el directorio raíz del proyecto.
+
+### 0. Conseguir la ISO de HuronOS (una sola vez, fuera de git)
+
+`huronOS-alpha-0.4-amd64.iso` **no está en el repo** (~5 GB, ver `.gitignore`) y hoy no hay ningún link a ella dentro del propio repo — hay que bajarla aparte, una sola vez, y dejarla en la raíz del proyecto:
+
+```bash
+curl -fSLo huronOS-alpha-0.4-amd64.iso https://mirrors.huronos.org/huronOS/alpha/huronOS-alpha-0.4-amd64.iso
+echo "b9d530bc7e5b862de9e20c6ce1690ab90f993c6bfa7b44655234708f4e06b2e9  huronOS-alpha-0.4-amd64.iso" | sha256sum -c
+```
+
+Es la versión "huronOS Queue 0.4" publicada en [huronos.org/download](https://huronos.org/download). El checksum de arriba es el que publica esa página (`sha256sum`, tiene que decir `OK`); si en algún momento cambia la versión soportada por este repo, hay que actualizar tanto el nombre de archivo (`ISO="..."` en `scripts/02-build-huronos-boot.sh` y `scripts/02b-setup-directives.sh`) como este checksum. Ese sitio también lista mirrors alternativos si la descarga directa va lenta.
+
+Sin este archivo, ningún paso de "Construir los archivos de boot" de abajo puede correr (necesitan montarla), aunque el kernel de `boot/` ya venga compilado en el repo.
+
+Si vas a preparar un master de hardware real (Raspberry Pi u otro ARM) y ya bajaste la ISO en otra máquina, es más rápido copiarla directo (`scp huronOS-alpha-0.4-amd64.iso pi@<host>:~/progDelfin_HuronOS_iPXE/`) que volver a descargar 5 GB — mismo criterio que `experimento_hardware_real/setup-master.sh` ya sugiere para este archivo.
+
+### Camino rápido (recomendado, salvo la primera vez)
+
+Una vez que `kernel-cache/` ya existe (paso 1 hecho al menos una vez), los pasos 2 a 4 se pueden correr de un tirón:
+
+```bash
+./scripts/05-run-full-boot.sh
+```
+
+Corre red virtual → capas `hmm`/`hnetsync` (solo si faltan) → `boot/` → directivas/software → master → verificación de que el master realmente esté sirviendo (no solo "creado"). Pide `sudo` varias veces (monta la ISO). Si algo fallara a mitad de camino, seguí con los pasos manuales de abajo para aislar en qué paso quedó.
+
+**Siempre** que se corre esto con las VMs esclavas ya prendidas, hay que **reiniciarlas después** (ver nota al final del paso 5) — `huronos-system.sfs` y `directives.hdf` solo se leen al arrancar.
+
+### Pasos manuales (para diagnosticar o repetir uno solo)
 
 ### 1. Compilar el kernel con soporte de red (una sola vez)
 
@@ -163,6 +204,14 @@ Ejecutar **en este orden** desde el directorio raíz del proyecto:
 ```
 
 Clona `huronOS-build-tools`, aplica `huronos-patch/livekitlib`, y compila el kernel `6.0.15-huronos+` (mismo `.config` oficial) dentro de un contenedor `debian:bullseye`, con `NETWORK=true` para que el initrd incluya `e1000`/`e1000e`. Es una compilación de kernel real — puede tardar bastante (hasta un par de horas según CPU). Resultado en `kernel-cache/`. Solo hay que repetir este paso si cambia la versión de HuronOS o el parche.
+
+#### 1b. (Opcional, recomendado) Empaquetar las dependencias externas primero
+
+```bash
+./scripts/00a-vendor-dependencies.sh
+```
+
+Descarga y guarda en `vendor/` (gitignored, ~840 MB) todo lo que el paso 1 pide a internet: la imagen `debian:bullseye`, los cuatro repos que clona (`huronOS-build-tools`, el kernel de Linux, `aufs-standalone`, `aufs-util`), y los ~380 `.deb` que instala, como un repo apt local. `00-build-kernel.sh` detecta `vendor/` solo y lo usa automáticamente en vez de salir a la red — si no existe, el comportamiento es idéntico al de siempre, así que este paso se puede saltar sin problema. Vale la pena correrlo **una vez que el kernel ya compiló bien** (ver "Solución de problemas" más abajo: bullseye ya rompió una vez sin aviso porque `security.debian.org` retiró paquetes en vivo — `vendor/` es el seguro contra que vuelva a pasar). Re-correr este script si se cambia `SNAPSHOT_DATE` en `00-build-kernel.sh`.
 
 ### 2. Red virtual
 
@@ -196,9 +245,10 @@ Nota sobre `02e-build-hnetsync-layer.sh`: si cambia `huronos-patch/livekitlib` (
 
 ```bash
 ./scripts/03-start-master.sh
+./scripts/03b-verify-master.sh
 ```
 
-Verificar que funciona:
+`03-start-master.sh` devuelve éxito con solo crear el contenedor — no garantiza que siga arriba (ver "Solución de problemas" más abajo, `docker-compose.yml` usa `network_mode: host` y puede chocar con servicios del sistema en el puerto 80). `03b-verify-master.sh` es el chequeo real: confirma que el contenedor esté `running` (no reiniciando en loop) y que `boot.ipxe`/`huronos-system.sfs` respondan por HTTP; si no, diagnostica por qué. Equivalente manual:
 
 ```bash
 curl http://192.168.100.1/boot.ipxe
@@ -210,13 +260,40 @@ docker logs -f ipxe-master
 
 ```bash
 # Terminal 1
-sudo ./scripts/04-start-slave1.sh
+sudo ./scripts/04b-start-slave1-checked.sh
 
 # Terminal 2
-sudo ./scripts/04-start-slave2.sh
+sudo ./scripts/04b-start-slave2-checked.sh
 ```
 
+Los wrappers `04b-*-checked.sh` corren `03b-verify-master.sh` antes de abrir la ventana de QEMU (si el master no responde, avisan y no lanzan la VM) y después ejecutan el script original (`04-start-slave1.sh`/`04-start-slave2.sh`) sin modificarlo. Para lanzar directo sin el chequeo previo, seguí usando `04-start-slave1.sh`/`04-start-slave2.sh` a secas.
+
 El log de arranque aparece en la terminal donde se lanzó el script (`-serial stdio`). Debe mostrar `huronOS Init process`, `Fetching huronOS system data from ...`, y terminar en `huronOS ready!, starting contest enviroment`.
+
+**Si las VMs ya estaban arrancadas y después cambiaste algo en `boot/`** (regeneraste `huronos-system.sfs`, agregaste las capas `06-netboot-hmm.hsl`/`07-hnetsync.hsl`, o publicaste `directives.hdf`/`boot/software/` por primera vez): las VMs corriendo **no** lo recogen solas. `huronos-system.sfs` se descarga una sola vez al arrancar (queda en RAM), y sin la capa `06-netboot-hmm.hsl` ya montada, `hmm` no sabe pedir `.hsm` al master aunque `directives.hdf` ya esté publicado. Hay que cerrar las VMs (`Ctrl+C` en cada terminal) y volver a lanzarlas.
+
+---
+
+## Solución de problemas
+
+Incidentes reales encontrados montando este entorno desde cero en una máquina nueva (detalle completo en `PROGRESO.md`, sección 15):
+
+**`00-build-kernel.sh` falla con `404 Not Found` bajando paquetes de `security.debian.org`**
+Debian 11 (bullseye) salió de soporte LTS y `security.debian.org` retira los `.deb` en vivo mientras `archive.debian.org` todavía no los re-aloja — el índice apt sigue anunciando versiones que ya no están en el pool. `00-build-kernel.sh` fija el `sources.list` del contenedor de build a un snapshot congelado de `snapshot.debian.org` (variable `SNAPSHOT_DATE` cerca del inicio del script) para evitar depender del mirror en vivo. Si esto vuelve a romperse en el futuro (el snapshot elegido también puede quedar fuera de rango, o Debian puede retirar snapshots viejos), hay que:
+1. Confirmar el rango de fechas en que `bullseye-security` sigue teniendo los `.deb` reales (no solo el índice) probando `curl -I` contra `http://snapshot.debian.org/archive/debian-security/<fecha>/pool/...` de algún paquete de la lista `PACKAGES` en `build-kernel.sh`.
+2. Actualizar `SNAPSHOT_DATE` a una fecha dentro de ese rango (tiene que ser una única fecha para las tres líneas del `sources.list` — main, updates y security — para que las versiones ya instaladas en la imagen `debian:bullseye` no queden en conflicto con lo que ofrece `main`).
+3. Correr `./scripts/00a-vendor-dependencies.sh` de nuevo para refrescar `vendor/` con la fecha nueva.
+
+Si ya corriste `scripts/00a-vendor-dependencies.sh` antes de que esto se rompa, no hace falta nada de lo anterior: `00-build-kernel.sh` usa `vendor/` automáticamente y no sale a `snapshot.debian.org` para nada.
+
+**`03-start-master.sh` "funciona" pero el contenedor entra en crash-loop (`nginx: bind() to 0.0.0.0:80 failed: Address already in use`)**
+`docker-compose.yml` usa `network_mode: host`, así que el `nginx` del master compite directo por el puerto 80 **del host**, no solo con otros contenedores. Si la máquina ya tiene algo en el 80 (Apache, otro nginx, etc.) el contenedor arranca, falla, y `restart: unless-stopped` lo reinicia en loop indefinidamente — `docker compose up -d` no avisa de esto porque el contenedor sí se crea. `03b-verify-master.sh` detecta este caso específico y sugiere el servicio a detener. Solución: `sudo systemctl stop <servicio>` (y `disable` si no hace falta), después `docker compose restart ipxe-master` (o volver a correr `03-start-master.sh`).
+
+**Las VMs arrancan pero no tienen `AvailableSoftware` ni las directivas del examen**
+Ver la nota al final del paso 5 de "Puesta en marcha" — casi siempre es que `kernel-cache/06-netboot-hmm.hsl`, `boot/directives.hdf` o `boot/software/` no se habían generado/publicado todavía cuando las VMs arrancaron por primera vez (`02c`/`02e`/`02b` son pasos separados de `02`, fáciles de olvidar). Confirmar mirando el log de nginx del master: `docker exec ipxe-master tail -f /var/log/nginx/boot-access.log` — si aparece `GET /directives.hdf ... 404` repitiéndose cada ~60s, confirma que nunca se publicó. Correr los scripts que falten y **reiniciar las VMs** (no alcanza con que el master ya sirva bien; ver nota del paso 5).
+
+**Un archivo que debería estar en `master/` no aparece en `git status` después de crearlo**
+Ya corregido, pero por si se reintroduce: revisar que `.gitignore` no tenga una regla de bloque completo tipo `master/` — `git add` lo ignora en silencio sin ningún error visible. `master/.env` es lo único de esa carpeta que debe estar ignorado.
 
 ---
 
